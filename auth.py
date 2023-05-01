@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-import defusedxml.lxml as safe_lxml
+import splunk.safe_lxml_etree as et
 import logging
 import platform
 import time
@@ -23,7 +23,7 @@ def getSessionKey(username, password, hostPath=None, newPassword=None):
     if hostPath:
         uri = splunk.mergeHostPath(hostPath) + uri
     args = {'username': username, 'password': password }
-    
+
     if newPassword:
         args['new_password'] = newPassword
 
@@ -38,15 +38,15 @@ def getSessionKey(username, password, hostPath=None, newPassword=None):
 
     if serverResponse.status != 200:
         logger.error('getSessionKey - unable to login; check credentials')
-        rest.extractMessages(safe_lxml.fromstring(serverContent))
+        rest.extractMessages(et.fromstring(serverContent))
         return None
-        
-    root = safe_lxml.fromstring(serverContent)
+
+    root = et.fromstring(serverContent)
     sessionKey = root.findtext('sessionKey')
 
     splunk.setDefault('username', username)
     splunk.setDefault('sessionKey', sessionKey)
-    
+
     return sessionKey
 
 def getSessionKeyForTrustedUser(username, hostPath=None):
@@ -58,20 +58,20 @@ def getSessionKeyForTrustedUser(username, hostPath=None):
     if hostPath:
         uri = splunk.mergeHostPath(hostPath) + uri
     args = {'username': username}
-    
+
     serverResponse, serverContent = rest.simpleRequest(uri, postargs=args)
 
     if serverResponse.status != 200:
         logger.error('getSessionKey - unable to login; check credentials')
-        rest.extractMessages(safe_lxml.fromstring(serverContent))
+        rest.extractMessages(et.fromstring(serverContent))
         return None
-        
-    root = safe_lxml.fromstring(serverContent)
+
+    root = et.fromstring(serverContent)
     sessionKey = root.findtext('sessionKey')
 
     splunk.setDefault('username', username)
     splunk.setDefault('sessionKey', sessionKey)
-    
+
     return sessionKey
 
 def getUserPrefs(key):
@@ -86,23 +86,23 @@ def getUserPrefsGeneral(key):
     '''
     return en.getEntities('data/user-prefs').get('general_default').get(key)
 
-    
+
 def ping(hostPath=None, sessionKey=None):
     '''
     Pings services server and returns a bool for a users session. This method is useful for
     synchronizing an applications authentication with Splunk's services authentication.
-    '''    
+    '''
     uri = '/services'
     if hostPath:
         uri = splunk.mergeHostPath(hostPath) + uri
-    
+
     try:
         serverResponse, serverContent = rest.simpleRequest(uri, sessionKey=sessionKey)
         return True
     except:
         return False
-    
-    
+
+
 def listUsers(**kwargs):
     '''
     Returns a list of users.
@@ -126,7 +126,7 @@ def getUser(name=None, id=None, **kwargs):
 
     elif id:
         raise Exception('User IDs are no longer available; all users must be identified by name')
-        
+
     else:
         raise TypeError('No arguments specified')
 
@@ -140,24 +140,24 @@ def getCurrentUser():
         import cherrypy
         cherryname = cherrypy.session.get('user', {}).get('name')
         if cherryname:
-            cherryname = cherryname.strip().lower() 
-    
+            cherryname = cherryname.strip().lower()
+
     return  {
         'userid': '-1',
         'name': cherryname or splunk.getDefault('username') or 'UNDEFINED_USERNAME',
         'realname': 'UNDEFINED_REALNAME',
         'roles': ['UNDEFINED_ROLES']
-    }  
+    }
 
 
-    
+
 def listRoles(**kwargs):
     '''
     Returns a list of roles.
     '''
     uri = 'authorization/roles'
     return en.getEntities(uri, **kwargs)
-    
+
 
 def getRole(name, **kwargs):
     '''
@@ -166,92 +166,17 @@ def getRole(name, **kwargs):
     if not name:
         raise TypeError('Name argument is missing')
 
-    uri = 'authorization/roles' 
+    uri = 'authorization/roles'
     try:
         return en.getEntity(uri, name, **kwargs)
     except splunk.ResourceNotFound:
         return {}
-    
-        
 
-    
-    
-#
-# unit tests
-#
-    
-if __name__ == '__main__':
-    
-    import unittest
-    
-    class MainTest(unittest.TestCase):
 
-        def testSingleWrites(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            self.assert_(key)
-            
-        def testGetNotExistUserByName(self):
-            key = getSessionKey('admin', 'changeme')
-
-            info = getUser('idontexist', sessionKey=key)
-            self.assertEquals(info, None)
-            
-        def testGetUserByName(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            info = getUser('admin', sessionKey=key)
-            self.assertEquals(info['name'], 'admin')
-            self.assertEquals(info['realname'], 'Administrator')
-            self.assert_('admin' in info['roles'])
-            self.assert_('system' in info['eai:acl']['owner'])
-
-        def testGetRole(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            info = getRole('admin', sessionKey=key)
-            self.assert_('main' in info['imported_srchIndexesDefault'])
-            self.assert_('power' in info['imported_roles'])
-            self.assert_('system' in info['eai:acl']['sharing'])
-            self.assert_('search' in info['imported_capabilities'])
-            
-        def testGetListUsers(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            users = listUsers(sessionKey=key)
-            self.assert_(len(users) > 0)
-            self.assert_('admin' in users)
-            
-        def testGetListRoles(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            roles = listRoles(sessionKey=key)
-            self.assert_(len(roles) > 0)
-            self.assert_('admin' in roles)
-
-        def testGetRemoteUserByName(self):
-            key = getSessionKey('admin', 'changeme')
-            
-            info = getUser('admin', sessionKey=key)
-            self.assertEquals(info['name'], 'admin')
-            self.assertEquals(info['realname'], 'Administrator')
-            self.assert_('admin' in info['roles'])
-            self.assert_('system' in info['eai:acl']['owner'])            
-            
-        def testGetRemoteListUsers(self):
-            key = getSessionKey('admin', 'changeme')
-
-            users = listUsers(sessionKey=key)
-            self.assert_(len(users) > 0)
-            self.assert_('admin' in users)       
-            
-        def testGetRemoteListRoles(self):        
-            key = getSessionKey('admin', 'changeme')
-            
-            roles = listRoles(sessionKey=key)
-            self.assert_(len(roles) > 0)
-            self.assert_('admin' in roles)
-            
-
-    suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
-    unittest.TextTestRunner(verbosity=2).run(suite)
+def is_current_user_admin():
+    current_user = getCurrentUser().get('name')
+    current_user_info = en.getEntity('authentication/users', current_user)
+    current_user_capabilities = None
+    if current_user_info and hasattr(current_user_info, 'properties'):
+        current_user_capabilities = current_user_info.properties.get('capabilities')
+    return current_user_capabilities and 'admin_all_objects' in current_user_capabilities

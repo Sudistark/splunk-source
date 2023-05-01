@@ -553,7 +553,14 @@ def get_translation(domain, languages):
                 primary = lang
                 primary_mo = mofile
             if t is None:
-                t = _translations.setdefault(key, SparkleTranslations(open(mofile, 'rb'))) # was GNUTranslations
+                try:
+                    t = _translations.setdefault(key, SparkleTranslations(open(mofile, 'rb')))  # was GNUTranslations
+                except UnicodeDecodeError:
+                    logger.warn("%s is not encoded in UTF-8. Please use UTF-8 encoding." % key)
+                    continue
+                except Exception as e:
+                    logger.exception(e)
+                    continue
                 _translations_by_locale.setdefault(lang, t)
             # Copy the translation object to allow setting fallbacks and
             # output charset. All other instance data is shared with the
@@ -643,9 +650,6 @@ def find_trans_keys_for_file_direct(filename):
                 fn = fn[fn.rindex('../')+3:]
             except ValueError:
                 pass
-            # hack for search_mrsparkle directories
-            if fn.startswith('web/'):
-                fn = fn[4:]
             if msgid:
                 # process the existing entry for the last match
                 result.append( (msgid, msgid_plural) )
@@ -888,7 +892,8 @@ def translate_js(filename, locale=None):
         f = open(cache_file, 'w')
         f.close()
         return False
-    with open(tmp_file, 'w', newline='\n') as f:
+    # SPL-189148: Explicitly specify utf-8, as sometimes this was opened as something else (i.e. latin-1)
+    with open(tmp_file, 'w', newline='\n', encoding='utf-8') as f:
         f.write("\n// Translations for %s\n" % locale)
         f.write("i18n_register("+json_table+");\n\n\n")
 
@@ -1053,8 +1058,8 @@ def write_numeral_translation(js_path, locale, dest_file):
 def write_jquery_ui_datepicker_translation(js_path, locale, dest_file):
     lang = locale.replace("_", "-")
     path = False
-    path1 = os.path.join(js_path, 'contrib', 'jquery-ui-1.10.4', 'i18n', 'jquery.ui.datepicker-%s.js' % lang)
-    path2 = os.path.join(js_path, 'contrib', 'jquery-ui-1.10.4', 'i18n', 'jquery.ui.datepicker-%s.js' % lang[:2])
+    path1 = os.path.join(js_path, 'contrib', 'jquery.ui.datepicker', 'jquery.ui.datepicker-%s.js' % lang)
+    path2 = os.path.join(js_path, 'contrib', 'jquery.ui.datepicker', 'jquery.ui.datepicker-%s.js' % lang[:2])
     for testpath in (path1, path2):
         if os.path.exists(testpath):
             path = testpath

@@ -267,6 +267,8 @@ CLUSTER_LONG="""
 
                   [remove] cluster-peers
 
+                  [remove] cluster-search-heads
+
                   [apply|validate|rollback] cluster-bundle
 
                   [show] [cluster-bundle-status|maintenance-mode|primaries-backup-status]
@@ -313,6 +315,7 @@ CLUSTER_LONG="""
                     ./splunk rebalance cluster-data -action start|stop|status
                     ./splunk remove excess-buckets
                     ./splunk remove cluster-peers
+                    ./splunk remove cluster-search-heads
                     ./splunk apply cluster-bundle
                     ./splunk validate cluster-bundle
                     ./splunk rollback cluster-bundle
@@ -1538,8 +1541,9 @@ SEARCHSERVER_LONG="""
 
         remoteUsername   username to access the remote server
 
-        remotePassword   password to access the remote server
-
+        remotePassword   password to access the remote server 
+                         CAUTION: Providing a remotePassword as a clear text argument is a security risk. If you do not 
+                                  provide a remotePassword, the program asks for one.
      For edit:
 
         action           [enable|disable|quarantine|unquarantine]

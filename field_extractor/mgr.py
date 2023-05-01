@@ -3,6 +3,7 @@ from __future__ import print_function
 from builtins import object
 
 import sys, time, re, os
+from splunk.util import pytest_mark_skip_conditional
 import xml.sax.saxutils as su
 
 import splunk.auth
@@ -14,6 +15,7 @@ import splunk.util
 from splunk.field_extractor import MultiFieldLearn as fieldlearner
 
 import logging
+import unittest
 logger = logging.getLogger('dmfx')
 
 
@@ -91,7 +93,7 @@ def gtfo(sessionKey, source_field, marked_up_events, counter_examples, filter, s
 
 def convertEvents(results):
    """ convert search results into list of dict"""
-   events = []            
+   events = []
    for i, result in enumerate(results):
       event = {}
       for k in result:
@@ -502,71 +504,85 @@ def printList(name, values):
    if len(values)>10:
       print("\t...")
 
-def test():
-   owner = 'admin'
-   sessionKey = splunk.auth.getSessionKey('admin', 'changeme')
 
-   apps = getAppsList(sessionKey, owner)
-   printList("apps", apps)
+@unittest.skip("ToDo: Move to functional tests as it depends on Splunk being up and running")
+class UTest(unittest.TestCase):
+   
+   def __init__(self, *arg, **kwargs):
+        super(UTest, self).__init__(*arg, **kwargs)
 
-   indexes = getIndexList(sessionKey, owner)
-   printList("indexes", indexes)
+   def test_case1(self):
+      owner = 'admin'
+      sessionKey = splunk.auth.getSessionKey('admin', 'changeme')
 
-   index = '_internal'
-   for rtype in ["source", "sourcetype", "host"]:
-      vals = getRestrictionValues(sessionKey, rtype, index)
-      printList(rtype, vals)
+      apps = getAppsList(sessionKey, owner)
+      printList("apps", apps)
 
-   app = 'search'
-   rtype = 'sourcetype'
-   rval = 'splunkd'
-   source_field = '_raw'
-   results_type = 'latest'
-   edited_extractions = []
-   marked_up_events = []
-   counter_examples = []
-   filter = 'INFO'
-   existing_regexes = []
+      indexes = getIndexList(sessionKey, owner)
+      printList("indexes", indexes)
 
-   saved_extractions = getSavedExtractions(sessionKey, app, owner, index, rtype, rval, source_field, edited_extractions)
-   printList("existing extractions", saved_extractions)
+      index = '_internal'
+      for rtype in ["source", "sourcetype", "host"]:
+         vals = getRestrictionValues(sessionKey, rtype, index)
+         printList(rtype, vals)
 
-   print("NO EXAMPLES")
-   max_lines_per_event = 10
-   vals = gtfo(sessionKey, owner, app, index, rtype, rval, source_field, results_type, edited_extractions, marked_up_events, counter_examples, filter, existing_regexes, max_lines_per_event)
-   rules = vals["rules"]
-   events = vals["events"]
-   sid = vals["sid"]
-   offset = vals["offset"]
-   printList("rules", rules)
-   printList("events", events)
-   print("sid: " + str(sid))
-   print("offset: " + str(offset))
+      app = 'search'
+      rtype = 'sourcetype'
+      rval = 'splunkd'
+      source_field = '_raw'
+      results_type = 'latest'
+      edited_extractions = []
+      marked_up_events = []
+      counter_examples = []
+      filter = 'INFO'
+      existing_regexes = []
 
-   print("GIVEN AN EXAMPLE")
-   marked_up_events = [ { 'id':'0', 'foo': 'INFO', '_event': events[0] } ]
-   vals = gtfo(sessionKey, owner, app, index, rtype, rval, source_field, results_type, edited_extractions, marked_up_events, counter_examples, filter, existing_regexes, max_lines_per_event)
-   rules = vals["rules"]
-   events = vals["events"]
-   sid = vals["sid"]
-   offset = vals["offset"]
-   printList("rules", rules)
-   printList("events", events)
-   print("sid: " + str(sid))
-   print("offset: " + str(offset))
+      saved_extractions = getSavedExtractions(sessionKey, app, owner, index, rtype, rval, source_field, edited_extractions)
+      printList("existing extractions", saved_extractions)
 
-   fields = getSourceFields(events)
-   printList("fields", fields)
+      print("NO EXAMPLES")
+      max_lines_per_event = 10
+      vals = gtfo(sessionKey, owner, app, index, rtype, rval, source_field, results_type, edited_extractions, marked_up_events, counter_examples, filter, existing_regexes, max_lines_per_event)
+      if vals:
+         rules = vals["rules"]
+         events = vals["events"]
+         sid = vals["sid"]
+         offset = vals["offset"]
+         printList("rules", rules)
+         printList("events", events)
+         print("sid: " + str(sid))
+         print("offset: " + str(offset))
 
-   make_global = True
-   oattribute = 'foo'
-   name = 'fooname'
-   for rule in rules:
-      regex = rule.getPattern()
-      print("new regex: " + regex)
-      saveRule(sessionKey, app, owner, make_global, oattribute, regex, source_field, rtype, rval, name)
-      deleteRule(sessionKey, app, owner, make_global, oattribute, regex, source_field, rtype, rval, name)
+         print("GIVEN AN EXAMPLE")
+         marked_up_events = [ { 'id':'0', 'foo': 'INFO', '_event': events[0] } ]
+         vals = gtfo(sessionKey, owner, app, index, rtype, rval, source_field, results_type, edited_extractions, marked_up_events, counter_examples, filter, existing_regexes, max_lines_per_event)
+         if vals:
+            rules = vals["rules"]
+            events = vals["events"]
+            sid = vals["sid"]
+            offset = vals["offset"]
+            printList("rules", rules)
+            printList("events", events)
+            print("sid: " + str(sid))
+            print("offset: " + str(offset))
+
+         fields = getSourceFields(events)
+         printList("fields", fields)
+
+         make_global = True
+         oattribute = 'foo'
+         name = 'fooname'
+         for rule in rules:
+            regex = rule.getPattern()
+            print("new regex: " + regex)
+            saveRule(sessionKey, app, owner, make_global, oattribute, regex, source_field, rtype, rval, name)
+            deleteRule(sessionKey, app, owner, make_global, oattribute, regex, source_field, rtype, rval, name)
+      else:
+         print("none returned from convertEvents")
 
 
 if __name__ == '__main__':
-   test()
+   suite1 = unittest.TestLoader().loadTestsFromTestCase(UTest)
+   
+   alltests = unittest.TestSuite([suite1])
+   unittest.TextTestRunner(verbosity=2).run(alltests)

@@ -221,8 +221,8 @@ class ModuleMapper(object):
                         sys.path.insert(0, module_path)
                         try:
                             mod = __import__(modname)
-                        except ValueError as e:
-                            logger.warning("Error importing module: %s. Exception: %s" % (modname, e))
+                        except Exception as e:
+                            logger.error("Error importing module: %s. Exception: %s" % (modname, e))
                             continue
 
                         # find all the module classes that subclass module.ModuleHandler()
@@ -464,60 +464,61 @@ class ModuleMapper(object):
 ### make ModuleMapper a singleton
 moduleMapper = ModuleMapper()
 
+# Tests
+import unittest
+
+class ModuleLookupTest(unittest.TestCase):
+
+    def testSystemAndApp(self):
+        lookups = [
+            '/home/docyes/code/splunk/opt/ace/etc/apps/launcher/appserver/modules/mystuff',
+            '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/results',
+            '/home/docyes/code/splunk/opt/ace/etc/apps/search/appserver/modules/crap'
+        ]
+        class_name = 'Splunk.Module.EventsViewer'
+        module_lookup = ModuleLookup()
+        module_lookup.add(lookups[0], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
+        module_lookup.add(lookups[1], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+        module_lookup.add(lookups[2], class_name)
+        self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+
+    def testAppOnly(self):
+        lookups = [
+            '/home/docyes/code/splunk/opt/ace/etc/apps/zoltar/appserver/modules/futures',
+            '/home/docyes/code/splunk/opt/ace/etc/apps/launcher/appserver/modules/mystuff',
+            '/home/docyes/code/splunk/opt/ace/etc/apps/search/appserver/modules/crap'
+        ]
+        class_name = 'Splunk.Module.EventsViewer'
+        module_lookup = ModuleLookup()
+        module_lookup.add(lookups[0], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
+        module_lookup.add(lookups[1], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+        module_lookup.add(lookups[2], class_name)
+        self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+
+    def testSystemOnly(self):
+        lookups = [
+            '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/zoltar',
+            '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/bertrand',
+            '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/results',
+        ]
+        class_name = 'Splunk.Module.EventsViewer'
+        module_lookup = ModuleLookup()
+        module_lookup.add(lookups[0], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
+        module_lookup.add(lookups[1], class_name)
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+        module_lookup.add(lookups[2], class_name)
+        self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
+        self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
+
+
 if __name__ == '__main__':
-
-    import unittest
-
-    class ModuleLookupTest(unittest.TestCase):
-
-        def testSystemAndApp(self):
-            lookups = [
-                '/home/docyes/code/splunk/opt/ace/etc/apps/launcher/appserver/modules/mystuff',
-                '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/results',
-                '/home/docyes/code/splunk/opt/ace/etc/apps/search/appserver/modules/crap'
-            ]
-            class_name = 'Splunk.Module.EventsViewer'
-            module_lookup = ModuleLookup()
-            module_lookup.add(lookups[0], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
-            module_lookup.add(lookups[1], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-            module_lookup.add(lookups[2], class_name)
-            self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-
-        def testAppOnly(self):
-            lookups = [
-                '/home/docyes/code/splunk/opt/ace/etc/apps/zoltar/appserver/modules/futures',
-                '/home/docyes/code/splunk/opt/ace/etc/apps/launcher/appserver/modules/mystuff',
-                '/home/docyes/code/splunk/opt/ace/etc/apps/search/appserver/modules/crap'
-            ]
-            class_name = 'Splunk.Module.EventsViewer'
-            module_lookup = ModuleLookup()
-            module_lookup.add(lookups[0], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
-            module_lookup.add(lookups[1], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-            module_lookup.add(lookups[2], class_name)
-            self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-
-        def testSystemOnly(self):
-            lookups = [
-                '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/zoltar',
-                '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/bertrand',
-                '/home/docyes/code/splunk/opt/ace/share/splunk/search_mrsparkle/modules/results',
-            ]
-            class_name = 'Splunk.Module.EventsViewer'
-            module_lookup = ModuleLookup()
-            module_lookup.add(lookups[0], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[0], class_name))
-            module_lookup.add(lookups[1], class_name)
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-            module_lookup.add(lookups[2], class_name)
-            self.assertFalse(module_lookup.is_primary(lookups[2], class_name))
-            self.assertTrue(module_lookup.is_primary(lookups[1], class_name))
-
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(ModuleLookupTest))

@@ -1,12 +1,22 @@
-import os
-import re
 import json
-import splunk.entity as en
-#pylint: disable=F0401
-import win32api, win32con, pywintypes
+import os
 import logging as logger
-import re
 
+import splunk.entity as en
+
+import sys
+if not sys.platform.startswith("win"):
+    # "skipping windows-only tests"
+    try:
+        import pytest
+        win32api = pytest.importorskip('win32api')
+        win32con = pytest.importorskip('win32con')
+    except ImportError as err:
+        pass
+
+import win32api  # NOQA: E0402 # pylint: disable=import-error
+import win32con  # NOQA: E0402 # pylint: disable=import-error
+import pywintypes  # NOQA: E0402 # pylint: disable=import-error
 
 """
 Encodes a currentName into JSON, depending on whether currentName is in

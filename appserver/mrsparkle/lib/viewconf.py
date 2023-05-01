@@ -12,6 +12,7 @@ import logging
 import lxml.etree as et
 import os
 
+import cherrypy
 import splunk
 import splunk.util
 import splunk.models.view_escaping.fromdash as fromdash
@@ -44,7 +45,7 @@ ROOT_VIEW_ATTRIBUTES = [
 
 def dumps(obj):
     '''
-    Serializes a view object configuration into Splunk 4.0 XML view 
+    Serializes a view object configuration into Splunk 4.0 XML view
     configuration format string.
     '''
 
@@ -157,13 +158,50 @@ def load(filePath):
     root = safe_lxml.parse(filePath)
     return _viewXmlToObject(root, viewName)
 
+def get_dashboard_template_from_version(version):
+    if version == '2.0':
+        return util.getDashboardV2TemplateUri()
+    if version == '1.1':
+        return util.getDashboardV1p1TemplateUri()
+    if version == '1.0':
+        return util.getDashboardV1TemplateUri()
+    # Fallback to 1.1
+    return util.getDashboardV1p1TemplateUri()
+
+def get_temporary_xml_load_version():
+    if 'xmlv' not in cherrypy.request.params:
+        return None
+    return cherrypy.request.params['xmlv']
+
+def get_simplexml_dashboard_version(root_version, url_xmlv):
+    default_version = '1.1'
+    valid_xml_versions = { '1.0', '1.1' }
+    is_valid_url_xmlv = url_xmlv is not None and url_xmlv in valid_xml_versions
+    load_updated_temp_view = root_version == '1.0' and is_valid_url_xmlv and url_xmlv != '1.0'
+    def get_candidate_version():
+        # 1. Explicitly declared xml source version
+        # * As long we shouldn't load an up-to-date temp view
+        if root_version is not None and root_version.startswith('1.') and load_updated_temp_view == False:
+            return root_version
+        # 2. Load temporary dashboard version (for allowed versions only)
+        if is_valid_url_xmlv:
+            return url_xmlv
+        # 3. Load version 1.1 by default
+        return default_version
+    candidate_version = get_candidate_version()
+    # If candidate load version is 1.0 but template does not exist, load 1.1
+    v1_template_path = 'share/splunk/search_mrsparkle/templates%s' % util.getDashboardV1TemplateUri()
+    v1_template_exists = util.splunk_home_file_exists(v1_template_path)
+    v1_exists = cherrypy.config.get('enable_jQuery2', True) and util.splunk_home_file_exists(v1_template_path)
+    return default_version if (candidate_version == '1.0' and not v1_exists) else candidate_version
+
 def loads(xmlString, viewName, flashOk=True, viewDigest=None, sourceApp=None):
     '''
     Parses a Splunk 4.0 view XML configuration string into native objects
     '''
 
     parser = et.XMLParser(remove_blank_text=True, remove_comments=False, remove_pis=True)
-    # Per SPL-32256, our XML parser only wants ascii and will handle dealing with 
+    # Per SPL-32256, our XML parser only wants ascii and will handle dealing with
     # utf-8 encoding itself.
     xmlString = xmlString.encode('ascii', 'xmlcharrefreplace')
 
@@ -175,7 +213,11 @@ def loads(xmlString, viewName, flashOk=True, viewDigest=None, sourceApp=None):
         # for some reason 'modules' key is needed for this output
         return {'template': util.getDashboardV2TemplateUri(), 'modules': {}}
     elif root.tag in ['dashboard', 'form']:
-        return {'simplexml': xmlString, 'template': util.getDashboardV1TemplateUri(), 'modules': {}, 'isSimpleXML': True}
+        src_version = root.get('version')
+        url_xmlv = get_temporary_xml_load_version()
+        version = get_simplexml_dashboard_version(src_version, url_xmlv)
+        v1_template = get_dashboard_template_from_version(version)
+        return {'simplexml': xmlString, 'template': v1_template, 'modules': {}, 'isSimpleXML': True}
     else:
         return _viewXmlToObject(root, viewName)
 
@@ -246,7 +288,7 @@ def _viewXmlToObject(lxmlNode, name):
         autoCancelInterval = 90
     output['autoCancelInterval'] = autoCancelInterval
 
-    # bypass stickiness features, set to False to disable. 
+    # bypass stickiness features, set to False to disable.
     v = lxmlNode.get('isSticky', True)
     output['isSticky'] = splunk.util.normalizeBoolean(v)
 
@@ -356,19 +398,180 @@ def _paramNodeToObject(lxmlNode, keyedParamMap):
 
     return output
 
+# Tests
+import unittest
+
+class LoadsSuite(unittest.TestCase):
+    def test_v1_root_is_dashboard(self):
+        viewConfig = loads('<dashboard></dashboard>', 'fake_dashboard_id')
+        self.assertEqual(viewConfig, { 'template': '/pages/dashboard_1.1.html', 'simplexml': b'<dashboard></dashboard>', 'isSimpleXML': True, 'modules': {} })
+
+    def test_v1_root_is_form(self):
+        viewConfig = loads('<form></form>', 'fake_dashboard_id')
+        self.assertEqual(viewConfig, { 'template': '/pages/dashboard_1.1.html', 'simplexml': b'<form></form>', 'isSimpleXML': True, 'modules': {} })
+
+    def test_v1p1_root_is_dashboard(self):
+        viewConfig = loads('<dashboard version="1.1"></dashboard>', 'fake_dashboard_id')
+        self.assertEqual(viewConfig, { 'template': '/pages/dashboard_1.1.html', 'simplexml': b'<dashboard version="1.1"></dashboard>', 'isSimpleXML': True, 'modules': {} })
+
+    def test_v1p1_root_is_form(self):
+        viewConfig = loads('<form version="1.1"></form>', 'fake_dashboard_id')
+        self.assertEqual(viewConfig, { 'template': '/pages/dashboard_1.1.html', 'simplexml': b'<form version="1.1"></form>', 'isSimpleXML': True, 'modules': {} })
+
+class GetSimpleXMLVersionSuite(unittest.TestCase):
+
+    # +------+--------------+----------+--------------------+--------+
+    # | case | root_version | url_xmlv | v1_template_exists | result |
+    # +------+--------------+----------+--------------------+--------+
+    # | 1    | None         | None     | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 2    | None         | 1.0      | True               | 1.0    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 2.1  | None         | 1.0      | False              | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 3    | None         | 1.1      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 4    | None         | 2.0      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 5    | 1.0          | None     | True               | 1.0    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 5.1  | 1.0          | None     | False              | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 6    | 1.0          | 1.0      | True               | 1.0    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 6.1  | 1.0          | 1.0      | False              | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 7    | 1.0          | 1.1      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 8    | 1.0          | 2.0      | True               | 1.0    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 8.1  | 1.0          | 2.0      | False              | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 9    | 1.1          | None     | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 10   | 1.1          | 1.0      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 11   | 1.1          | 1.1      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 12   | 1.1          | 2.0      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 13   | 3.0          | None     | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 14   | 3.0          | 1.0      | True               | 1.0    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 14.1 | 3.0          | 1.0      | False              | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 15   | 3.0          | 1.1      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+    # | 16   | 3.0          | 2.0      | N/A                | 1.1    |
+    # +------+--------------+----------+--------------------+--------+
+
+    def setUp(self):
+        splunk_home = os.environ.get('SPLUNK_HOME')
+        self.v1_template_path = os.path.join(splunk_home, 'share/splunk/search_mrsparkle/templates/pages/dashboard.html')
+        self.hidden_v1_template_path = os.path.join(splunk_home, 'share/splunk/search_mrsparkle/templates/pages/dashboard.html.hidden')
+
+    def tearDown(self):
+        if os.path.exists(self.hidden_v1_template_path):
+            os.rename(self.hidden_v1_template_path, self.v1_template_path)
+
+    def test_case_1(self):
+        version = get_simplexml_dashboard_version(None, None)
+        self.assertEqual(version, '1.1')
+
+    def test_case_2(self):
+        version = get_simplexml_dashboard_version(None, '1.0')
+        self.assertEqual(version, '1.0')
+
+    def test_case_2p1(self):
+        os.rename(self.v1_template_path, self.hidden_v1_template_path)
+        version = get_simplexml_dashboard_version(None, '1.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_3(self):
+        version = get_simplexml_dashboard_version(None, '1.1')
+        self.assertEqual(version, '1.1')
+
+    def test_case_4(self):
+        version = get_simplexml_dashboard_version(None, '2.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_5(self):
+        version = get_simplexml_dashboard_version('1.0', None)
+        self.assertEqual(version, '1.0')
+
+    def test_case_5p1(self):
+        os.rename(self.v1_template_path, self.hidden_v1_template_path)
+        version = get_simplexml_dashboard_version('1.0', None)
+        self.assertEqual(version, '1.1')
+
+    def test_case_6(self):
+        version = get_simplexml_dashboard_version('1.0', '1.0')
+        self.assertEqual(version, '1.0')
+
+    def test_case_6p1(self):
+        os.rename(self.v1_template_path, self.hidden_v1_template_path)
+        version = get_simplexml_dashboard_version('1.0', '1.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_7(self):
+        version = get_simplexml_dashboard_version('1.0', '1.1')
+        self.assertEqual(version, '1.1')
+
+    def test_case_8(self):
+        version = get_simplexml_dashboard_version('1.0', '2.0')
+        self.assertEqual(version, '1.0')
+
+    def test_case_8p1(self):
+        os.rename(self.v1_template_path, self.hidden_v1_template_path)
+        version = get_simplexml_dashboard_version('1.0', '2.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_9(self):
+        version = get_simplexml_dashboard_version('1.1', None)
+        self.assertEqual(version, '1.1')
+
+    def test_case_10(self):
+        version = get_simplexml_dashboard_version('1.1', '1.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_11(self):
+        version = get_simplexml_dashboard_version('1.1', '1.1')
+        self.assertEqual(version, '1.1')
+
+    def test_case_12(self):
+        version = get_simplexml_dashboard_version('1.1', '2.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_13(self):
+        version = get_simplexml_dashboard_version('3.0', None)
+        self.assertEqual(version, '1.1')
+
+    def test_case_14(self):
+        version = get_simplexml_dashboard_version('3.0', '1.0')
+        self.assertEqual(version, '1.0')
+
+    def test_case_14p1(self):
+        os.rename(self.v1_template_path, self.hidden_v1_template_path)
+        version = get_simplexml_dashboard_version('3.0', '1.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_15(self):
+        version = get_simplexml_dashboard_version('3.0', '1.1')
+        self.assertEqual(version, '1.1')
+
+    def test_case_16(self):
+        version = get_simplexml_dashboard_version('3.0', '2.0')
+        self.assertEqual(version, '1.1')
+
+    def test_case_17(self):
+        version = get_simplexml_dashboard_version('1.0', '1.0.0')
+        self.assertEqual(version, '1.0')
+
 if __name__ == '__main__':
-    
-    import unittest
-
-    class MainTest(unittest.TestCase):
-        def test_loads_dashboard_v1_root_is_dashboard(self):
-            viewConfig = loads('<dashboard></dashboard>', 'fake_dashboard_id')
-            self.assertEquals(viewConfig, { 'template': '/pages/dashboard.html', 'simplexml': '<dashboard></dashboard>', 'isSimpleXML': True, 'modules': {} })
-        
-        def test_loads_dashboard_v1_root_is_form(self):
-            viewConfig = loads('<form></form>', 'fake_dashboard_id')
-            self.assertEquals(viewConfig, { 'template': '/pages/dashboard.html', 'simplexml': '<form></form>', 'isSimpleXML': True, 'modules': {} })
-
     # run tests
-    suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
-    unittest.TextTestRunner(verbosity=2).run(suite)
+    loads_suite = unittest.TestLoader().loadTestsFromTestCase(LoadsSuite)
+    unittest.TextTestRunner(verbosity=2).run(loads_suite)
+
+    get_simplexml_version_suite = unittest.TestLoader().loadTestsFromTestCase(GetSimpleXMLVersionSuite)
+    unittest.TextTestRunner(verbosity=2).run(get_simplexml_version_suite)

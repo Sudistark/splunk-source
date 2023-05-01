@@ -9,7 +9,7 @@ import __main__
 import logging.handlers
 import getpass, string, re, os, sys, copy, stat, socket, subprocess, time, traceback
 import xml.etree.cElementTree as et
-import lxml.etree as etree
+import splunk.safe_lxml_etree as etree
 import xml.dom.minidom
 import http.client, shutil
 from io import StringIO
@@ -22,6 +22,7 @@ from splunk.clilib.control_exceptions import FileType, FileAccess, PipeIOError, 
 import splunk.util as util
 import collections
 import contextlib
+from contextlib import contextmanager
 
 import logging
 
@@ -92,13 +93,19 @@ def bom_aware_readline(fileobj, do_not_fold_pattern = None):
            the regex do_not_fold_pattern.
     """
     atstart = (fileobj.tell() == 0)
+    if atstart:
+       bom_type = encoding_from_bom(fileobj)
     line = b""
     while True:
         l = fileobj.readline()
         if atstart:
-            if len(l) > 2 and l[0] == 239 and l[1] == 187 and l[2] == 191:
-                # UTF-8 BOM detected: skip it over
+            # if BOM was detected, skip over it
+            if bom_type == "utf-16le" or bom_type == "utf-16be":
+                l = l[2:]
+            if bom_type == "utf-8":
                 l = l[3:]
+            if bom_type == "utf-32le" or bom_type == "utf-32be":
+                l = l[4:]
             atstart = False
 
         def fold_with_next_line(current_line):
@@ -163,11 +170,40 @@ def readConfFile(path, ordered=False):
       f = open(path, 'w')
     else:
       f = open(path, 'rb')
+      # check for utf-16 or utf-32 BOM and handle accordingly
+      encoding = encoding_from_bom(f)
+      if encoding != "" and encoding != "utf-8":
+        f = wrapped_utf_encoded_reader(f, encoding)
+
       lines = bom_aware_readlines(f, CONF_FILE_COMMENT_LINE_REGEX)
       settings = readConfLines(lines, ordered)
 
     f.close()
     return settings
+
+def encoding_from_bom(fileobj):
+    l = fileobj.readline()
+    bom_detected = ""
+    if len(l) > 1:
+        if l[0] == 255 and l[1] == 254:
+            bom_detected = "utf-16le"
+        if l[0] == 254 and l[1] == 255:
+            bom_detected = "utf-16be"
+        if len(l) > 2 and l[0] == 239 and l[1] == 187 and l[2] == 191:
+            bom_detected = "utf-8"
+        if len(l) > 3:
+            if l[0] == 255 and l[1] == 254 and l[2] == 0 and l[3] == 0:
+                bom_detected = "utf-32le"
+            if l[0] == 0 and l[1] == 0 and l[2] == 254 and l[3] == 255:
+                bom_detected = "utf-32be"
+    fileobj.seek(0)
+    return bom_detected
+
+def wrapped_utf_encoded_reader(fileobj, encoding):
+    import codecs
+    data_info = codecs.lookup("utf-8")
+    file_info = codecs.lookup(encoding)
+    return codecs.StreamRecoder(fileobj, data_info.encode, data_info.decode, file_info.streamreader, file_info.streamwriter, "strict")
 
 def readConfLines(lines, ordered=False):
     """
@@ -436,12 +472,17 @@ def getMgmtUri():
           logger.info("Will use default management port " + mgmtPort + "; error retrieving from config: " + format(e))
       out = ""
       procArgs = [os.path.join(os.environ["SPLUNK_HOME"], "bin", "splunkd"), "local-rest-uri", "-p", mgmtPort]
+      sys.tracebacklimit = 0  # Turn off gratitious Python tracebacks, SPL-188323
       try:
-          out = subprocess.check_output(procArgs, stderr=subprocess.STDOUT)
+          with open(os.devnull, 'w')  as devnull:
+              out = subprocess.check_output(procArgs, stderr=devnull)
           if sys.version_info >= (3, 0): out = out.decode()
       except subprocess.CalledProcessError as e:
-          logger.error("Unable to retrieve splunkd management port using '" + " ".join(procArgs) + "': " + e.output)
-          raise ConfigError("Unable to retrieve splunkd management port using '" + " ".join(procArgs) + "': " + e.output)
+          e_output = e.output
+          if sys.version_info >= (3, 0): e_output = e_output.decode()
+          logger.error("Unable to retrieve splunkd management port using '" + " ".join(procArgs) + "': " + e_output)
+          raise ConfigError("Unable to retrieve splunkd management port using '" + " ".join(procArgs) + "': " + e_output)
+      sys.tracebacklimit = 1000
       _mgmtUri = out.strip()
       # SPL-138540 local-rest-uri does not return default protocol port.
       # "$SPLUNK_HOME/bin/splunkd local-rest-uri -p <mgmtPort>" does not return port 80(http) or 443(https)
@@ -1421,31 +1462,6 @@ def newLogHandler(stream, isDebug, normal, filter = True):
     logHandler.addFilter(FilterThreshold(normal))
   return logHandler
 
-# example usage:
-#
-#       id_user_map = id2userMapFromPasswdFile( "/opt/splunk/etc/passwd" )
-#       for id,name in id_user_map.items():
-#               print("user with id="+id+" has username=" + name)
-####
-def id2userMapFromPasswdFile(path):
-        retval = {}
-        if not os.path.isfile( path ):
-                logger.warn( 'file ' +path+ ' does not exist' )
-                return {}
-        fin = open(path, "r")
-        line = fin.readline()
-        passwd_line_checker = re.compile( "^\d+:\S+:" );
-        while line:
-                if passwd_line_checker.search( line ) :
-                        tokens = line.split(":")
-                        if ( len(tokens) >= 2 ):
-                                retval[ tokens[0] ] = tokens[1]
-                        else:
-                                logger.warn( 'skipping due to len(token) ' + line + ' ' + str(len(tokens)) )
-                else:
-                        logger.warn( 'skipping due to regex check ' + line )
-                line = fin.readline()
-        return retval
 
 ###########################################################
 # bucket operations
@@ -1652,328 +1668,367 @@ def getSplunkdServiceName():
   return build_info.SVC_SPLUNKD
 
 
+#
+# Unittests
+#
+import io
+import tempfile
+import unittest
+
+DEFAULT_STANZA = "default"
+
+@contextmanager
+def captured_output():
+    new_out, new_err = StringIO(), StringIO()
+    old_out, old_err = sys.stdout, sys.stderr
+    try:
+        sys.stdout, sys.stderr = new_out, new_err
+        yield sys.stdout, sys.stderr
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+
+@contextmanager
+def os_environment_temporary_remover(var_names):
+    old_values = {name: os.environ[name] for name in var_names if name in os.environ}
+    try:
+        for name in old_values:
+            os.environ.pop(name)
+        yield
+    finally:
+        for name in old_values:
+            os.environ[name] = old_values[name]
+
+class Tests(unittest.TestCase):
+
+  def test_getMgmtUri_returns_url_on_success(self):
+    with captured_output() as (stdout, stderr):
+        result = getMgmtUri()
+        out, err = stdout.getvalue(), stderr.getvalue()
+    self.assertEqual((out, err), ('', ''))
+    self.assertTrue(re.search('^https?://.*:\d{1,5}(/.*)?$', result))
+
+  def test_getMgmtUri_returns_url_in_bad_env(self):
+    with os_environment_temporary_remover(['HOSTNAME']), captured_output() as (stdout, stderr):
+        result = getMgmtUri()
+        out, err = stdout.getvalue(), stderr.getvalue()
+    self.assertEqual((out, err), ('', ''))
+    self.assertTrue(re.search('^https?://.*:\d{1,5}(/.*)?$', result))
+
+  def _create_conf_file_and_read_it(self, contents):
+      try:
+          fd, name = tempfile.mkstemp()
+          os.write(fd, contents)
+          os.closerange(fd, fd + 1)
+          return readConfFile(name)
+      finally:
+          os.closerange(fd, fd + 1)
+          os.unlink(name)
+
+  def _is_empty_settings(self, settings):
+      if DEFAULT_STANZA in settings:
+          return len(settings) == 1 and len(settings[DEFAULT_STANZA]) == 0
+      else:
+          return len(settings) == 0
+
+  # A number of the readConfFile-based tests have twins over on the C++
+  # side for the equivalent functionality in teutil's IniFile class.
+
+  def test_readConfFile_with_empty_file(self):
+      settings = self._create_conf_file_and_read_it(b"")
+      self.assertTrue(self._is_empty_settings(settings))
+
+  def test_readConfFile_with_single_hash_comment_line(self):
+      settings = self._create_conf_file_and_read_it(
+          b"# This is a comment.\n")
+      self.assertTrue(self._is_empty_settings(settings))
+
+  def test_readConfFile_with_single_semicolon_comment_line(self):
+      settings = self._create_conf_file_and_read_it(
+          b"; This is a comment.\n")
+      self.assertTrue(self._is_empty_settings(settings))
+
+  def test_readConfFile_with_single_stanzaless_setting(self):
+      settings = self._create_conf_file_and_read_it(
+          b"enableFoo = true\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
+
+  def test_readConfFile_with_single_stanza_and_setting(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[foo]\n"
+          b"enableFoo = true\n")
+      self.assertEqual(settings["foo"]["enableFoo"], "true")
+
+  def test_readConfFile_with_single_stanza_and_setting_preceded_by_hash_comment_line_that_ends_in_a_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"# This is a comment.\\\n"
+          b"[foo]\n"
+          b"enableFoo = true\n")
+      self.assertEqual(settings["foo"]["enableFoo"], "true")
+
+  def test_readConfFile_with_single_stanza_and_setting_preceded_by_semicolon_comment_line_that_ends_in_a_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"; This is a comment.\\\n"
+          b"[foo]\n"
+          b"enableFoo = true\n")
+      self.assertEqual(settings["foo"]["enableFoo"], "true")
+
+  def test_readConfFile_with_single_stanzaless_setting_preceded_by_hash_comment_line_that_ends_in_a_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"# This is a comment.\\\n"
+          b"enableFoo = true\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
+
+  def test_readConfFile_with_single_stanzaless_setting_preceded_by_semicolon_comment_line_that_ends_in_a_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"; This is a comment.\\\n"
+          b"enableFoo = true\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
+
+  # N.B.  This test relies upon the current implementation model of
+  #       having the dict returned by readConfFile as writable verbatim
+  #       (i.e., escapes are prepresent) by writeConfFile.  If such
+  #       is ever changed, then the escaped-backslash in the assertEqual()
+  #       should be removed.
+  def test_readConfFile_with_stanza_containing_newline(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[foo\\\n"
+          b"bar]\n"
+          b"enableFoobar = true\n")
+      self.assertEqual(settings["foo\\\nbar"]["enableFoobar"], "true")
+
+  def test_readConfFile_with_stanza_containing_left_square_bracket(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[foo]]\n")
+      self.assertEqual(settings["foo]"], {})
+
+  def test_readConfFile_with_stanza_containing_right_square_bracket(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[[foo]\n")
+      self.assertEqual(settings["[foo"], {})
+
+  def test_readConfFile_with_stanza_containing_left_and_right_square_bracket(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[[foo]]\n")
+      self.assertEqual(settings["[foo]"], {})
+
+  def test_readConfFile_with_key_containing_whitespace(self):
+      settings = self._create_conf_file_and_read_it(b"foo     bar = true")
+      self.assertEqual(
+          settings[DEFAULT_STANZA]["foo     bar"], "true")
+
+  def test_readConfFile_with_value_containing_whitespace(self):
+      settings = self._create_conf_file_and_read_it(b"true = foo     bar")
+      self.assertEqual(settings[DEFAULT_STANZA]["true"], "foo     bar")
+
+  # N.B.  This test relies upon the current implementation model of
+  #       having the dict returned by readConfFile as writable verbatim
+  #       (i.e., escapes are prepresent) by writeConfFile.  If such
+  #       is ever changed, then the escaped-backslash in the assertEqual()
+  #       should be removed.
+  def test_readConfFile_with_key_containing_newline(self):
+      settings = self._create_conf_file_and_read_it(
+          b"enableFoo\\\n"
+          b"bar = true\n")
+      self.assertEqual(
+          settings[DEFAULT_STANZA]["enableFoo\\\nbar"], "true")
+
+  # N.B.  This test relies upon the current implementation model of
+  #       having the dict returned by readConfFile as writable verbatim
+  #       (i.e., escapes are prepresent) by writeConfFile.  If such
+  #       is ever changed, then the escaped-backslash in the assertEqual()
+  #       should be removed.
+  def test_readConfFile_with_value_containing_newline(self):
+      settings = self._create_conf_file_and_read_it(
+          b"enableFoo = true\\\n"
+          b"false\n")
+      self.assertEqual(
+          settings[DEFAULT_STANZA]["enableFoo"], "true\\\nfalse")
+
+  def test_readConfFile_with_value_containing_equals(self):
+      settings = self._create_conf_file_and_read_it(b"foo=bar=baz\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["foo"], "bar=baz")
+
+  def test_readConfFile_with_key_containing_equals(self):
+      settings = self._create_conf_file_and_read_it(b"foo\\=bar=baz\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["foo=bar"], "baz")
+
+  def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_double_backslash(self):
+      settings = self._create_conf_file_and_read_it(b"foo\\\\=bar=baz\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["foo\\"], "bar=baz")
+
+  def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_triple_backslash(self):
+      settings = self._create_conf_file_and_read_it(b"foo\\\\\\=bar=baz\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["foo\\=bar"], "baz")
+
+  def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_quadruple_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"foo\\\\\\\\=bar=baz\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["foo\\\\"], "bar=baz")
+
+  def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_quintuple_backslash(self):
+      settings = self._create_conf_file_and_read_it(
+          b"foo\\\\\\\\\\=bar=baz\n")
+      self.assertEqual(
+          settings[DEFAULT_STANZA]["foo\\\\=bar"], "baz")
+
+  def test_readConfFile_with_key_value_bit_containing_single_escaped_equals(self):
+      settings = self._create_conf_file_and_read_it(b"foo\\=bar\n")
+      self.assertFalse("foo=bar" in settings[DEFAULT_STANZA])
+
+  def test_readConfFile_with_stanza_with_leading_and_trailing_whitespace(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[ foo ]\n"
+          b"enableFoo = true ")
+      self.assertEqual(settings[" foo "]["enableFoo"], "true")
+
+  def test_readConfFile_with_stanza_containing_left_bracket(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[foo[bar]\n"
+          b"enableFoo = true")
+      self.assertEqual(settings["foo[bar"]["enableFoo"], "true")
+
+  def test_readConfFile_with_stanza_containing_right_bracket(self):
+      settings = self._create_conf_file_and_read_it(
+          b"[foo]bar]\n"
+          b"enableFoo = true")
+      self.assertEqual(settings["foo]bar"]["enableFoo"], "true")
+
+  def test_readConfFile_with_empty_key(self):
+      settings = self._create_conf_file_and_read_it(b"= whatever\n")
+      # I think it could be argued that this case is silly; however having
+      # it explicit helps to ensure parity with teutil's IniFile class.
+      self.assertTrue("" in settings[DEFAULT_STANZA][""]);
+
+  def test_readConfFile_with_empty_key_and_leading_whitespace(self):
+      settings = self._create_conf_file_and_read_it(b"\t = whatever\n")
+      # I think it could be argued that this case is silly; however having
+      # it explicit helps to ensure parity with teutil's IniFile class.
+      self.assertTrue("" in settings[DEFAULT_STANZA][""])
+
+  def test_readConfFile_with_empty_value(self):
+      settings = self._create_conf_file_and_read_it(b"whatever =\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["whatever"], "")
+
+  def test_readConfFile_with_empty_value_and_leading_whitespace(self):
+      settings = self._create_conf_file_and_read_it(b"whatever = \t \n")
+      self.assertEqual(settings[DEFAULT_STANZA]["whatever"], "")
+
+  def test_readConfFile_with_key_value_bit_preceded_by_tab(self):
+      settings = self._create_conf_file_and_read_it(b"\tfrobnicate=true\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
+
+  def test_readConfFile_with_key_value_bit_with_tab_before_equals(self):
+      settings = self._create_conf_file_and_read_it(b"frobnicate\t=true\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
+
+  def test_readConfFile_with_key_value_bit_with_tab_after_equals(self):
+      settings = self._create_conf_file_and_read_it(b"frobnicate=\ttrue\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
+
+  def test_readConfFile_with_key_value_bit_with_trailing_tab(self):
+      settings = self._create_conf_file_and_read_it(b"frobnicate=true\t\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
+
+  def test_readConfFile_with_key_value_bit_with_tabs_tabs_everywhere(self):
+      settings = self._create_conf_file_and_read_it(
+          b"\tfrobnicate\t\t=\t\t\ttrue\t\t\t\t\n")
+      self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
+
+  def test_readConfFile_with_key_containing_multiple_equals(self):
+      settings = self._create_conf_file_and_read_it(
+          b"foo\\=bar\\=baz=CONKERS!\n")
+      self.assertEqual(
+          settings[DEFAULT_STANZA]["foo=bar=baz"], "CONKERS!")
+
+  # Since there's a fair bit of code in migration.py that rewrites
+  # conf files using readConfFile and writeConfFile, we do a bit of
+  # a torture test here to ensure that the two are compatible.
+  # (Of course it's true that if the intermediate dict is nonsensical,
+  # that wouldn't be picked up here.  But hopefully this acts as a
+  # nice safety harness in case we ever e.g., change how escaping is
+  # interpreted/rendered.)
+  def test_readConfFile_writeConfFile_cycle_fidelity(self):
+      orig_settings = self._create_conf_file_and_read_it(
+          b"# This is a comment ending in escape!\\\n"
+          b"[foobar0]\n"
+          b"foobar = true\n"
+          b"\n"
+          b"[foo\\\n"
+          b"bar1]\n"
+          b"foobar = true\n"
+          b"\n"
+          b"[foobar2]\n"
+          b"foo\\\n"
+          b"bar = true\n"
+          b"\n"
+          b"[foobar3]\n"
+          b"foobar = true\\\n"
+          b"false\n"
+          b"\n"
+          b"[foobar4]\n"
+          b"foobar \\= foo = bar\n"
+          b"\n"
+          b"[foo]bar5]\n"
+          b"foobar = true\n"
+          b"\n"
+          b"[foo]\\\n"
+          b"bar6]\n"
+          b"foobar = true\n"
+          b"\n"
+          b"[foobar7]\n"
+          b"foo = bar = foobar\n"
+          b"\n"
+          b"[ foo bar 8 ]\n"
+          b"foobar = true\n"
+          b"\n"
+          b"[foobar9]\n"
+          b"foo\\\\=bar=baz\n");
+      try:
+          fd, name = tempfile.mkstemp()
+          os.closerange(fd, fd + 1)
+          writeConfFile(name, orig_settings)
+          cycled_settings = readConfFile(name)
+      finally:
+          os.unlink(name)
+      self.assertEqual(cycled_settings, orig_settings)
+
+  def test_bom_aware_readline_with_two_simple_lines(self):
+      line = bom_aware_readline(io.BytesIO(b"line1\nline2\n"))
+      self.assertEqual(line, "line1\n")
+
+  def test_bom_aware_readline_with_two_lines_first_ends_in_newline(self):
+      line = bom_aware_readline(io.BytesIO(b"line1\\\nline2\n"))
+      self.assertEqual(line, "line1\\\nline2\n")
+
+  def test_bom_aware_readline_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_unspecified(self):
+      line = bom_aware_readline(io.BytesIO(b"# line1\\\nline2\n"))
+      self.assertEqual(line, "# line1\\\nline2\n")
+
+  def test_bom_aware_readline_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_specified(self):
+      line = bom_aware_readline(
+          io.BytesIO(b"# line1\\\nline2\n"),
+          re.compile(br"^\s*#"))
+      self.assertEqual(line, "# line1\\\n")
+
+  def test_bom_aware_readlines_with_two_simple_lines(self):
+      lines = bom_aware_readlines(io.BytesIO(b"line1\nline2\n"))
+      self.assertEqual(lines, ["line1\n", "line2\n"])
+
+  def test_bom_aware_readlines_with_two_lines_first_ends_in_newline(self):
+      lines = bom_aware_readlines(io.BytesIO(b"line1\\\nline2\n"))
+      self.assertEqual(lines, ["line1\\\nline2\n"])
+
+  def test_bom_aware_readlines_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_unspecified(self):
+      lines = bom_aware_readlines(io.BytesIO(b"# line1\\\nline2\n"))
+      self.assertEqual(lines, ["# line1\\\nline2\n"])
+
+  def test_bom_aware_readlines_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_specified(self):
+      lines = bom_aware_readlines(
+          io.BytesIO(b"# line1\\\nline2\n"),
+          re.compile(br"\s*#"))
+      self.assertEqual(lines, ["# line1\\\n", "line2\n"])
+
+
 if __name__ == "__main__":
-    import io
-    import tempfile
-    import unittest
-
-    DEFAULT_STANZA = "default"
-
-    class Tests(unittest.TestCase):
-
-        def _create_conf_file_and_read_it(self, contents):
-            try:
-                fd, name = tempfile.mkstemp()
-                os.write(fd, contents)
-                os.closerange(fd, fd + 1)
-                return readConfFile(name)
-            finally:
-                os.closerange(fd, fd + 1)
-                os.unlink(name)
-
-        def _is_empty_settings(self, settings):
-            if DEFAULT_STANZA in settings:
-                return len(settings) == 1 and len(settings[DEFAULT_STANZA]) == 0
-            else:
-                return len(settings) == 0
-
-        # A number of the readConfFile-based tests have twins over on the C++
-        # side for the equivalent functionality in teutil's IniFile class.
-
-        def test_readConfFile_with_empty_file(self):
-            settings = self._create_conf_file_and_read_it(b"")
-            self.assertTrue(self._is_empty_settings(settings))
-
-        def test_readConfFile_with_single_hash_comment_line(self):
-            settings = self._create_conf_file_and_read_it(
-                b"# This is a comment.\n")
-            self.assertTrue(self._is_empty_settings(settings))
-
-        def test_readConfFile_with_single_semicolon_comment_line(self):
-            settings = self._create_conf_file_and_read_it(
-                b"; This is a comment.\n")
-            self.assertTrue(self._is_empty_settings(settings))
-
-        def test_readConfFile_with_single_stanzaless_setting(self):
-            settings = self._create_conf_file_and_read_it(
-                b"enableFoo = true\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
-
-        def test_readConfFile_with_single_stanza_and_setting(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[foo]\n"
-                b"enableFoo = true\n")
-            self.assertEqual(settings["foo"]["enableFoo"], "true")
-
-        def test_readConfFile_with_single_stanza_and_setting_preceded_by_hash_comment_line_that_ends_in_a_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"# This is a comment.\\\n"
-                b"[foo]\n"
-                b"enableFoo = true\n")
-            self.assertEqual(settings["foo"]["enableFoo"], "true")
-
-        def test_readConfFile_with_single_stanza_and_setting_preceded_by_semicolon_comment_line_that_ends_in_a_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"; This is a comment.\\\n"
-                b"[foo]\n"
-                b"enableFoo = true\n")
-            self.assertEqual(settings["foo"]["enableFoo"], "true")
-
-        def test_readConfFile_with_single_stanzaless_setting_preceded_by_hash_comment_line_that_ends_in_a_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"# This is a comment.\\\n"
-                b"enableFoo = true\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
-
-        def test_readConfFile_with_single_stanzaless_setting_preceded_by_semicolon_comment_line_that_ends_in_a_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"; This is a comment.\\\n"
-                b"enableFoo = true\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["enableFoo"], "true")
-
-        # N.B.  This test relies upon the current implementation model of
-        #       having the dict returned by readConfFile as writable verbatim
-        #       (i.e., escapes are prepresent) by writeConfFile.  If such
-        #       is ever changed, then the escaped-backslash in the assertEqual()
-        #       should be removed.
-        def test_readConfFile_with_stanza_containing_newline(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[foo\\\n"
-                b"bar]\n"
-                b"enableFoobar = true\n")
-            self.assertEqual(settings["foo\\\nbar"]["enableFoobar"], "true")
-
-        def test_readConfFile_with_stanza_containing_left_square_bracket(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[foo]]\n")
-            self.assertEqual(settings["foo]"], {})
-
-        def test_readConfFile_with_stanza_containing_right_square_bracket(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[[foo]\n")
-            self.assertEqual(settings["[foo"], {})
-
-        def test_readConfFile_with_stanza_containing_left_and_right_square_bracket(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[[foo]]\n")
-            self.assertEqual(settings["[foo]"], {})
-
-        def test_readConfFile_with_key_containing_whitespace(self):
-            settings = self._create_conf_file_and_read_it(b"foo     bar = true")
-            self.assertEqual(
-                settings[DEFAULT_STANZA]["foo     bar"], "true")
-
-        def test_readConfFile_with_value_containing_whitespace(self):
-            settings = self._create_conf_file_and_read_it(b"true = foo     bar")
-            self.assertEqual(settings[DEFAULT_STANZA]["true"], "foo     bar")
-
-        # N.B.  This test relies upon the current implementation model of
-        #       having the dict returned by readConfFile as writable verbatim
-        #       (i.e., escapes are prepresent) by writeConfFile.  If such
-        #       is ever changed, then the escaped-backslash in the assertEqual()
-        #       should be removed.
-        def test_readConfFile_with_key_containing_newline(self):
-            settings = self._create_conf_file_and_read_it(
-                b"enableFoo\\\n"
-                b"bar = true\n")
-            self.assertEqual(
-                settings[DEFAULT_STANZA]["enableFoo\\\nbar"], "true")
-
-        # N.B.  This test relies upon the current implementation model of
-        #       having the dict returned by readConfFile as writable verbatim
-        #       (i.e., escapes are prepresent) by writeConfFile.  If such
-        #       is ever changed, then the escaped-backslash in the assertEqual()
-        #       should be removed.
-        def test_readConfFile_with_value_containing_newline(self):
-            settings = self._create_conf_file_and_read_it(
-                b"enableFoo = true\\\n"
-                b"false\n")
-            self.assertEqual(
-                settings[DEFAULT_STANZA]["enableFoo"], "true\\\nfalse")
-
-        def test_readConfFile_with_value_containing_equals(self):
-            settings = self._create_conf_file_and_read_it(b"foo=bar=baz\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["foo"], "bar=baz")
-
-        def test_readConfFile_with_key_containing_equals(self):
-            settings = self._create_conf_file_and_read_it(b"foo\\=bar=baz\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["foo=bar"], "baz")
-
-        def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_double_backslash(self):
-            settings = self._create_conf_file_and_read_it(b"foo\\\\=bar=baz\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["foo\\"], "bar=baz")
-
-        def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_triple_backslash(self):
-            settings = self._create_conf_file_and_read_it(b"foo\\\\\\=bar=baz\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["foo\\=bar"], "baz")
-
-        def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_quadruple_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"foo\\\\\\\\=bar=baz\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["foo\\\\"], "bar=baz")
-
-        def test_readConfFile_with_key_value_bit_containing_double_equals_the_first_of_which_is_preceded_by_quintuple_backslash(self):
-            settings = self._create_conf_file_and_read_it(
-                b"foo\\\\\\\\\\=bar=baz\n")
-            self.assertEqual(
-                settings[DEFAULT_STANZA]["foo\\\\=bar"], "baz")
-
-        def test_readConfFile_with_key_value_bit_containing_single_escaped_equals(self):
-            settings = self._create_conf_file_and_read_it(b"foo\\=bar\n")
-            self.assertFalse("foo=bar" in settings[DEFAULT_STANZA])
-
-        def test_readConfFile_with_stanza_with_leading_and_trailing_whitespace(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[ foo ]\n"
-                b"enableFoo = true ")
-            self.assertEqual(settings[" foo "]["enableFoo"], "true")
-
-        def test_readConfFile_with_stanza_containing_left_bracket(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[foo[bar]\n"
-                b"enableFoo = true")
-            self.assertEqual(settings["foo[bar"]["enableFoo"], "true")
-
-        def test_readConfFile_with_stanza_containing_right_bracket(self):
-            settings = self._create_conf_file_and_read_it(
-                b"[foo]bar]\n"
-                b"enableFoo = true")
-            self.assertEqual(settings["foo]bar"]["enableFoo"], "true")
-
-        def test_readConfFile_with_empty_key(self):
-            settings = self._create_conf_file_and_read_it(b"= whatever\n")
-            # I think it could be argued that this case is silly; however having
-            # it explicit helps to ensure parity with teutil's IniFile class.
-            self.assertTrue("" in settings[DEFAULT_STANZA][""]);
-
-        def test_readConfFile_with_empty_key_and_leading_whitespace(self):
-            settings = self._create_conf_file_and_read_it(b"\t = whatever\n")
-            # I think it could be argued that this case is silly; however having
-            # it explicit helps to ensure parity with teutil's IniFile class.
-            self.assertTrue("" in settings[DEFAULT_STANZA][""])
-
-        def test_readConfFile_with_empty_value(self):
-            settings = self._create_conf_file_and_read_it(b"whatever =\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["whatever"], "")
-
-        def test_readConfFile_with_empty_value_and_leading_whitespace(self):
-            settings = self._create_conf_file_and_read_it(b"whatever = \t \n")
-            self.assertEqual(settings[DEFAULT_STANZA]["whatever"], "")
-
-        def test_readConfFile_with_key_value_bit_preceded_by_tab(self):
-            settings = self._create_conf_file_and_read_it(b"\tfrobnicate=true\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
-
-        def test_readConfFile_with_key_value_bit_with_tab_before_equals(self):
-            settings = self._create_conf_file_and_read_it(b"frobnicate\t=true\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
-
-        def test_readConfFile_with_key_value_bit_with_tab_after_equals(self):
-            settings = self._create_conf_file_and_read_it(b"frobnicate=\ttrue\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
-
-        def test_readConfFile_with_key_value_bit_with_trailing_tab(self):
-            settings = self._create_conf_file_and_read_it(b"frobnicate=true\t\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
-
-        def test_readConfFile_with_key_value_bit_with_tabs_tabs_everywhere(self):
-            settings = self._create_conf_file_and_read_it(
-                b"\tfrobnicate\t\t=\t\t\ttrue\t\t\t\t\n")
-            self.assertEqual(settings[DEFAULT_STANZA]["frobnicate"], "true")
-
-        def test_readConfFile_with_key_containing_multiple_equals(self):
-            settings = self._create_conf_file_and_read_it(
-                b"foo\\=bar\\=baz=CONKERS!\n")
-            self.assertEqual(
-                settings[DEFAULT_STANZA]["foo=bar=baz"], "CONKERS!")
-
-        # Since there's a fair bit of code in migration.py that rewrites
-        # conf files using readConfFile and writeConfFile, we do a bit of
-        # a torture test here to ensure that the two are compatible.
-        # (Of course it's true that if the intermediate dict is nonsensical,
-        # that wouldn't be picked up here.  But hopefully this acts as a
-        # nice safety harness in case we ever e.g., change how escaping is
-        # interpreted/rendered.)
-        def test_readConfFile_writeConfFile_cycle_fidelity(self):
-            orig_settings = self._create_conf_file_and_read_it(
-                b"# This is a comment ending in escape!\\\n"
-                b"[foobar0]\n"
-                b"foobar = true\n"
-                b"\n"
-                b"[foo\\\n"
-                b"bar1]\n"
-                b"foobar = true\n"
-                b"\n"
-                b"[foobar2]\n"
-                b"foo\\\n"
-                b"bar = true\n"
-                b"\n"
-                b"[foobar3]\n"
-                b"foobar = true\\\n"
-                b"false\n"
-                b"\n"
-                b"[foobar4]\n"
-                b"foobar \\= foo = bar\n"
-                b"\n"
-                b"[foo]bar5]\n"
-                b"foobar = true\n"
-                b"\n"
-                b"[foo]\\\n"
-                b"bar6]\n"
-                b"foobar = true\n"
-                b"\n"
-                b"[foobar7]\n"
-                b"foo = bar = foobar\n"
-                b"\n"
-                b"[ foo bar 8 ]\n"
-                b"foobar = true\n"
-                b"\n"
-                b"[foobar9]\n"
-                b"foo\\\\=bar=baz\n");
-            try:
-                fd, name = tempfile.mkstemp()
-                os.closerange(fd, fd + 1)
-                writeConfFile(name, orig_settings)
-                cycled_settings = readConfFile(name)
-            finally:
-                os.unlink(name)
-            self.assertEqual(cycled_settings, orig_settings)
-
-        def test_bom_aware_readline_with_two_simple_lines(self):
-            line = bom_aware_readline(io.BytesIO(b"line1\nline2\n"))
-            self.assertEqual(line, "line1\n")
-
-        def test_bom_aware_readline_with_two_lines_first_ends_in_newline(self):
-            line = bom_aware_readline(io.BytesIO(b"line1\\\nline2\n"))
-            self.assertEqual(line, "line1\\\nline2\n")
-
-        def test_bom_aware_readline_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_unspecified(self):
-            line = bom_aware_readline(io.BytesIO(b"# line1\\\nline2\n"))
-            self.assertEqual(line, "# line1\\\nline2\n")
-
-        def test_bom_aware_readline_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_specified(self):
-            line = bom_aware_readline(
-                io.BytesIO(b"# line1\\\nline2\n"),
-                re.compile(br"^\s*#"))
-            self.assertEqual(line, "# line1\\\n")
-
-        def test_bom_aware_readlines_with_two_simple_lines(self):
-            lines = bom_aware_readlines(io.BytesIO(b"line1\nline2\n"))
-            self.assertEqual(lines, ["line1\n", "line2\n"])
-
-        def test_bom_aware_readlines_with_two_lines_first_ends_in_newline(self):
-            lines = bom_aware_readlines(io.BytesIO(b"line1\\\nline2\n"))
-            self.assertEqual(lines, ["line1\\\nline2\n"])
-
-        def test_bom_aware_readlines_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_unspecified(self):
-            lines = bom_aware_readlines(io.BytesIO(b"# line1\\\nline2\n"))
-            self.assertEqual(lines, ["# line1\\\nline2\n"])
-
-        def test_bom_aware_readlines_with_two_lines_first_starts_with_comment_char_and_ends_in_newline_with_comment_regex_specified(self):
-            lines = bom_aware_readlines(
-                io.BytesIO(b"# line1\\\nline2\n"),
-                re.compile(br"\s*#"))
-            self.assertEqual(lines, ["# line1\\\n", "line2\n"])
-
     suite = unittest.TestLoader().loadTestsFromTestCase(Tests)
     unittest.TextTestRunner(verbosity=2).run(suite)

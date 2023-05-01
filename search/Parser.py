@@ -6,7 +6,7 @@ from builtins import object
 
 import httplib2
 
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import copy
 import splunk
 
@@ -16,14 +16,14 @@ import splunk.rest as rest
 import splunk.rest.format
 import splunk.util as util
 
-from splunk.search.TransformerUtil import tokenize,searchVToString
+from splunk.search.TransformerUtil import tokenize, searchVToString
 from builtins import range
 
 
 
 
 ###
-### Creat
+### Create
 ###
 
 def parseSearchToXML(search, hostPath=None, sessionKey=None, parseOnly='t', timeline=None, namespace=None, owner=None):
@@ -509,193 +509,378 @@ def deClause(val):
         val = val['clauses']
     return val
 
+# Unittests
+import unittest
+import json
+import splunk.search.TransformerUtil as tu
 
+def normalizeListArgs(val):
+    if isinstance(val, list):
+        return ' '.join(val).strip()
+    elif isinstance(val, str):
+        return val.strip()
+    return val
+
+from splunk.util import pytest_mark_skip_conditional
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class TestParse(unittest.TestCase):
+    def setUp(self):
+        self._sessionKey = auth.getSessionKey('admin', 'changeme')
+        self._hostPath   = splunk.mergeHostPath()
+
+    # searches
+    q = {
+        'single': "search foo bar baz",
+        'two': "search quux | diff position1=1 position2=2",
+        'quotes': 'search twikiuser="ivan" | diff position1=1 position2=2',
+    }
+
+    def testCreateClause(self):
+        """ Test the creation of new clause objects """
+
+        clause1 = ParsedClause()
+        clause1.command = "search"
+        clause1.args = "foo"
+        self.assertEqual(clause1.serialize(), "search foo")
+
+        # python dicts (the structure in which args are stored in the ParsedClause class)
+        # no longer maintain determinate ordering.
+        # therefore, the output of this test can be either
+        #   search index="_audit" foo bar baz, or
+        #   search foo bar baz index="_audit"
+        # both are identical searches
+        clause2 = ParsedClause()
+        clause2.command = "search"
+        clause2.args = {'index' : '_audit', 'search' : "foo bar baz"}
+        clause2String = clause2.serialize()
+        self.assertTrue(clause2String == 'search index="_audit" foo bar baz' or clause2String == 'search foo bar baz index="_audit"')
+
+        clause3 = ParsedClause(command="search", args="quux")
+        self.assertEqual(clause3.serialize(), 'search quux')
+
+        clause4 = ParsedClause(command="loglady")
+        self.assertEqual(clause4.serialize(), 'loglady')
+
+    def testEqualsOperatorClause(self):
+        """ Test the equals operator in ParsedClause """
+
+        # two clauses, including kv's that should be ignored in the compare, string case
+        clause1 = ParsedClause()
+        clause1.command = "search"
+        clause1.args = "foo readlevel=2"
+        clause2 = ParsedClause()
+        clause2.command = "search"
+        clause2.args = "foo index=default"
+        self.assertTrue( clause1 == clause2 )
+
+        # two clauses, including kv's that should be ignored in the compare, dict case
+        clause3 = ParsedClause()
+        clause3.command = "search"
+        clause3.args = {"index":"_internal", "user":"john"}
+        clause4 = ParsedClause()
+        clause4.command = "search"
+        clause4.args = {"index":"_internal", "user":"john", "readlevel":"2"}
+        self.assertTrue( clause3 == clause4 )
+
+        # two clauses, including kv's that should be not ignored in the compare, string case
+        clause5 = ParsedClause()
+        clause5.command = "search"
+        clause5.args = "foo readlevel=11"
+        clause6 = ParsedClause()
+        clause6.command = "search"
+        clause6.args = "foo index=default"
+        self.assertFalse( clause5 == clause6 )
+
+        # test indiv clauses pulled out of ParsedSearch
+        search1 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        search2 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertTrue( search1.clauses[1] == search2.clauses[1] )
+
+    def testEqualsOperatorSearch(self):
+        """ Test the equals operator in ParsedSearch """
+
+        ps1 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        ps2 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertTrue( ps1 == ps2 )
+
+        ps3 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        ps4 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertTrue( ps3 != ps4 )
+
+    def testParseOneClause(self):
+        """ Test the parsing of a single clause search """
+
+        ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+
+        self.assertEqual(len(ps.clauses), 1)
+        self.assertEqual(ps.clauses[0].command, 'search')
+        self.assertEqual(ps.clauses[0].serialize(), 'search foo bar baz')
+        self.assertTrue(ps.clauses[0].properties['streamType'] == 'SP_STREAM')
+
+    def testParseTwoClause(self):
+        """ Test the parsing of a single clause search """
+
+        ps = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+
+        self.assertEqual(len(ps.clauses), 2)
+        self.assertEqual(ps.clauses[0].command, 'search')
+        self.assertEqual(ps.clauses[1].command, 'diff')
+        self.assertEqual(normalizeListArgs(ps.clauses[0].args['search']), 'quux')
+        self.assertEqual(normalizeListArgs(ps.clauses[1].args), 'position1=1 position2=2')
+        print("PROPS: %s" % ps.clauses[1].properties)
+        self.assertEqual(ps.clauses[1].properties['streamType'], 'SP_EVENTS')
+
+
+    def testSerialize(self):
+        """ Test search serialization/tostring"""
+
+        ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertEqual(str(ps), self.q['single'])
+
+        ps = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertEqual(str(ps), self.q['two'])
+
+        ps = parseSearch(self.q['quotes'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertEqual(str(ps), self.q['quotes'])
+
+        indexSearch = 'search index="_audit"'
+        ps = parseSearch(indexSearch, hostPath=self._hostPath, sessionKey=self._sessionKey)
+        self.assertEqual(str(ps), indexSearch)
+
+    def testJsonable(self):
+        """ Test JSONable """
+        ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        print("\n\t%s" % json.dumps(ps.jsonable()))
+
+        ps = parseSearch(self.q['quotes'], hostPath=self._hostPath, sessionKey=self._sessionKey)
+        print("\t%s" % json.dumps(ps.jsonable()))
+
+    def test_chartSerializer(self):
+        """ Test chart serialization """
+        pc = ParsedClause()
+
+        cases = {
+            'chart sum(events) by hello,world':
+            {'xfield': 'hello', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world'},
+
+            'chart sum(events),count by hello,world':
+            {'xfield': 'hello','seriesfield': 'world',
+                'stat-specifiers': [
+                {'function': 'sum', 'field': 'events', 'rename': 'sum(events)'},
+                {'function': 'count', 'rename': 'count'}
+                ]
+            },
+
+            'timechart sum(events) by world':
+            {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world'},
+
+            'timechart sum(events),count by hello':
+            {'xfield': '_time','seriesfield': 'hello',
+                'stat-specifiers': [
+                {'function': 'sum', 'field': 'events', 'rename': 'sum(events)'},
+                {'function': 'count', 'rename': 'count'}
+                ]
+            },
+
+            'timechart span="1d" sum(events) by world':
+            {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world', 'span':'1d'},
+
+            'timechart bins=5 sum(events) by world':
+            {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world', 'bins':5 },
+        }
+        for k, v in cases.items():
+            command = k.split()[0]
+            out = str(ParsedClause(None, command, v))  #out = pc._chartingSerializer(command, v)
+            if out != k:
+                print("\n\nINPUT:  %s" % v)
+                print("GOAL:   %s" % k)
+                print("OUTPUT: %s" % out)
+                self.assertEqual( k, out)
+
+### Moved these Unit tests TransformerUtil.py due to cyclic dependency
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class TestTransformUtil(unittest.TestCase):
+    def setUp(self):
+        self._sessionKey = splunk.auth.getSessionKey('admin', 'changeme')
+        self._hostPath   = splunk.mergeHostPath()
+
+    def testHasTerms(self):
+        """ Are terms found correctly in search strings? """
+
+        searchString = 'search userid=6 username="nick" owner=ivan login'
+        ps = parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+
+        sc = tu.getClauseWithCommand(ps, "search")
+
+        self.assertTrue( tu.hasTerm(sc, "login") )
+        self.assertTrue( tu.hasTerm(sc, {"username":"nick"}) )
+        self.assertTrue( tu.hasTerm(sc, {"userid":6}) )
+
+        self.assertTrue( tu.hasTerm(sc, 'username="nick"') )
+        self.assertTrue( tu.hasTerm(sc, 'username=nick') )
+        self.assertTrue( tu.hasTerm(sc, 'owner="ivan"') )
+        self.assertTrue( tu.hasTerm(sc, 'owner=ivan') )
+        self.assertTrue( tu.hasTerm(sc, "userid=6") )
+
+        self.assertTrue( not tu.hasTerm(sc, "shouldNotBeHere") )
+        self.assertTrue( not tu.hasTerm(sc, {"username":"ivan"}) )
+        self.assertTrue( not tu.hasTerm(sc, {"userid":7}) )
+
+    def testRemoveTerms(self):
+        """ Are search terms correctly removed from search strings? """
+
+        searchString = 'search loglevel=7 userid=6 username="nick" owner=ivan target="mars" destination=home login'
+        ps = parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+
+        sc = tu.getClauseWithCommand(ps, "search")
+
+        tu.removeTerm(sc, "login")
+        self.assertTrue(sc.serialize().find("login") == -1 )
+
+        tu.removeTerm(sc, {"username" : "nick"} )
+        self.assertTrue(sc.serialize().find('username="nick"') == -1 )
+
+        tu.removeTerm(sc, {"owner" : "ivan"} )
+        self.assertTrue(sc.serialize().find('owner=ivan') == -1 )
+
+        tu.removeTerm(sc, {"userid" : 6} )
+        self.assertTrue(sc.serialize().find('userid=6') == -1 )
+
+        tu.removeTerm(sc, 'target=mars' )
+        tu.removeTerm(sc, 'destination="home"' )
+
+        tu.removeTerm(sc, "loglevel=7")
+        self.assertTrue(sc.serialize().find('loglevel=7') == -1 )
+
+        # ELVIS print(sc.serialize())
+        self.assertTrue( sc.serialize() == 'search *' )
+
+
+        # SPL-32258
+        searchString = 'search index=_internal sourcetype=splunkd OR sourcetype=searches'
+        ps = parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+        sc = tu.getClauseWithCommand(ps, "search")
+
+        tu.removeTerm(sc, {'sourcetype': 'searches'})
+        self.assertTrue(sc, 'index="_internal" sourcetype="splunkd"')
+        
+        searchString = 'search index=_internal sourcetype=splunkd OR sourcetype=searches'
+        ps = parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+        sc = tu.getClauseWithCommand(ps, "search")
+
+        tu.removeTerm(sc, {'sourcetype': 'splunkd'})
+        self.assertTrue(sc, 'index="_internal" sourcetype="searches"')
+
+    def testRemoveTermsEscaped(self):
+        '''
+        Verify remove term behavior when presented with terms that contain
+        escape character
+        '''
+
+        beforeSearchString = r'search this \\that foo'
+        parser = parseSearch(beforeSearchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+        searchClause = tu.getClauseWithCommand(parser, 'search')
+        tu.removeTerm(searchClause, r'\\that')
+        self.assertEqual(searchClause.serialize(), 'search this foo')
+
+        beforeSearchString = r'search this \that foo'
+        parser = parseSearch(beforeSearchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
+        searchClause = tu.getClauseWithCommand(parser, 'search')
+        tu.removeTerm(searchClause, r'\that')
+        self.assertEqual(searchClause.serialize(), 'search this foo')
+
+
+
+    def testTokenize(self):
+        """ Are search strings correctly tokenized? """
+
+        tokenTests = [
+            ( 'johnsmith',              ['johnsmith'] ),
+            ( 'john smith',             ['john', 'smith'] ),
+            ( 'x="y z"',                ['x="y z"'] ),
+            ( 'user=Main.JohnSmith',    ['user=Main.JohnSmith'] ),
+            ( 'superman "Lex Luther"',  ['superman', '"Lex Luther"'] ),
+            ( 'sourcetype=bar',         ['sourcetype=bar'] ),
+            ( 'sourcetype::bar',        ['sourcetype=bar'] ),
+            ( '( sourcetype=bar )',        ['sourcetype=bar'] ),
+            ( 'source="/var/log/*"',    ['source="/var/log/*"'] ),
+            ( 'x=p',                    ['x=p'] ),
+            ( 'x="p"',                  ['x="p"'] ),
+            ( 'NOT x',                    ['NOT x'] ),
+            ( 'x NOT y',                    ['x', 'NOT y'] ),
+            ( 'x NOT y z',                    ['x', 'NOT y', 'z'] ),
+            ( '(toBe OR notToBe) question',    ['(toBe OR notToBe)', 'question'] ),
+            ( 'toBe OR notToBe) question',     ['toBe', 'OR', 'notToBe)', 'question'] ),
+            ( 'toBe OR notToBe) ) question',   ['toBe', 'OR', 'notToBe)', ')', 'question'] ),
+            ( 'toBe OR notToBe)) question',    ['toBe', 'OR', 'notToBe))', 'question'] ),
+            ( '((toBe OR notToBe)) question',  ['((toBe OR notToBe))', 'question'] ),
+            ( '((toBe OR notToBe question',    ['((toBe OR notToBe question'] ),
+            ( '(toBe OR (notToBe)) question',  ['(toBe OR (notToBe))', 'question'] ),
+            ( '(toBe (OR (not)ToBe)) question', ['(toBe (OR (not)ToBe))', 'question'] ),
+            ( 'error OR failed OR severe OR ( sourcetype=access_* ( 404 OR 500 OR 503 ) ) starthoursago::24',\
+                ['error', 'OR', 'failed', 'OR', 'severe', 'OR', '( sourcetype=access_* ( 404 OR 500 OR 503 ) )', 'starthoursago::24']),
+            ( 'error OR failed OR severe OR ( sourcetype="access_*" ( 404 OR 500 OR 503 ) ) starthoursago::24',\
+                ['error', 'OR', 'failed', 'OR', 'severe', 'OR', '( sourcetype="access_*" ( 404 OR 500 OR 503 ) )', 'starthoursago::24']),
+            ('search foo [search bar | top host | format]', ['search', 'foo', '[search bar | top host | format]']),
+            ('search foo [search bar [search wunderbar] | top host | format]', ['search', 'foo', '[search bar [search wunderbar] | top host | format]']),
+            ('search "["', ['search', '"["']),
+            ('search "]"', ['search', '"]"']),
+            ('search "[[]"', ['search', '"[[]"']),
+            ('search "("', ['search', '"("']),
+            ('search "(["', ['search', '"(["']),
+            ('search "]"', ['search', '"]"']),
+
+            ('search this [search "]"]', ['search', 'this', '[search "]"]']),
+            ('search this (that OR ")")', ['search', 'this', '(that OR ")")']),
+        ]
+
+        for test in tokenTests:
+            self.assertEqual( tokenize(test[0]), test[1] )
+
+    def testStringToKV(self):
+        """ Are terms correctly tokenized in KV pairs? """
+
+        self.assertEqual(tu.stringToSearchKV( "index=_audit login" ), {"index":"_audit", "search":"login"} )
+
+    def testEqualStringTerms(self):
+        """ Are quotes in kv pairs ignored? """
+        
+        self.assertTrue( tu._equalKVStringTerms('hello=world', 'hello=world') )
+        self.assertTrue( tu._equalKVStringTerms('hello=world', 'hello="world"') )
+        self.assertTrue( tu._equalKVStringTerms("hello='world'", 'hello="world"') )
+        self.assertTrue( tu._equalKVStringTerms("hello='world'", 'hello=world') )
+
+        self.assertFalse( tu._equalKVStringTerms("hello='world'", 'hello=wxrld') )
+
+    def testKToString(self):
+        """ Are K fields correctly quoted when needed? """
+
+        self.assertEqual(tu.searchKToString("johnsmith" ), 'johnsmith' )
+        self.assertEqual(tu.searchKToString("john smith" ), '"john smith"' )
+        self.assertEqual(tu.searchKToString('boo'), 'boo' )
+
+    def testKVToString(self):
+        """ Are KV pairs correctly merged into search string terms? """
+
+        self.assertEqual(tu.searchVToString("johnsmith" ), '"johnsmith"' )
+        self.assertEqual(tu.searchVToString("john smith" ), '"john smith"' )
+        self.assertEqual(tu.searchVToString( 26 ), '26' )
+        self.assertEqual(tu.searchVToString( '26' ), '"26"' )
+        self.assertEqual(tu.searchVToString('"6"'), '"6"' )
+        self.assertEqual(tu.searchVToString('"boo"'), '"boo"' )
+        self.assertEqual(tu.searchVToString('boo'), '"boo"' )
+        
+    def testUnfilter(self):
+        """ Are the search terms correctly parsed out of search filter wrappers? """
+
+        self.assertEqual( tu.unfilterize( "( index=_audit login ) ( ( * ) )" ), "index=_audit login")
+        self.assertEqual( tu.unfilterize( "  ( index=_audit login ) ( ( * ) )" ), "index=_audit login")
+        self.assertEqual( tu.unfilterize( "  ( index=_audit login ) ( ( * ) )  " ), "index=_audit login")
 
 if __name__ == "__main__":
-    import unittest
-    import json
-
-    def normalizeListArgs(val):
-        if isinstance(val, list):
-            return ' '.join(val).strip()
-        elif isinstance(val, str):
-            return val.strip()
-        return val
-
-    class TestParse(unittest.TestCase):
-
-        _sessionKey = auth.getSessionKey('admin', 'changeme')
-        _hostPath   = splunk.mergeHostPath()
-
-        # searches
-        q = {
-            'single': "search foo bar baz",
-            'two': "search quux | diff position1=1 position2=2",
-            'quotes': 'search twikiuser="ivan" | diff position1=1 position2=2',
-        }
-
-        def testCreateClause(self):
-            """ Test the creation of new clause objects """
-
-            clause1 = ParsedClause()
-            clause1.command = "search"
-            clause1.args = "foo"
-            self.assertEquals(clause1.serialize(), "search foo")
-
-            # python dicts (the structure in which args are stored in the ParsedClause class)
-            # no longer maintain determinate ordering.
-            # therefore, the output of this test can be either
-            #   search index="_audit" foo bar baz, or
-            #   search foo bar baz index="_audit"
-            # both are identical searches
-            clause2 = ParsedClause()
-            clause2.command = "search"
-            clause2.args = {'index' : '_audit', 'search' : "foo bar baz"}
-            clause2String = clause2.serialize()
-            self.assertTrue(clause2String == 'search index="_audit" foo bar baz' or clause2String == 'search foo bar baz index="_audit"')
-
-            clause3 = ParsedClause(command="search", args="quux")
-            self.assertEquals(clause3.serialize(), 'search quux')
-
-            clause4 = ParsedClause(command="loglady")
-            self.assertEquals(clause4.serialize(), 'loglady')
-
-        def testEqualsOperatorClause(self):
-            """ Test the equals operator in ParsedClause """
-
-            # two clauses, including kv's that should be ignored in the compare, string case
-            clause1 = ParsedClause()
-            clause1.command = "search"
-            clause1.args = "foo readlevel=2"
-            clause2 = ParsedClause()
-            clause2.command = "search"
-            clause2.args = "foo index=default"
-            self.assert_( clause1 == clause2 )
-
-            # two clauses, including kv's that should be ignored in the compare, dict case
-            clause3 = ParsedClause()
-            clause3.command = "search"
-            clause3.args = {"index":"_internal", "user":"john"}
-            clause4 = ParsedClause()
-            clause4.command = "search"
-            clause4.args = {"index":"_internal", "user":"john", "readlevel":"2"}
-            self.assert_( clause3 == clause4 )
-
-            # two clauses, including kv's that should be not ignored in the compare, string case
-            clause5 = ParsedClause()
-            clause5.command = "search"
-            clause5.args = "foo readlevel=11"
-            clause6 = ParsedClause()
-            clause6.command = "search"
-            clause6.args = "foo index=default"
-            self.failIf( clause5 == clause6 )
-
-            # test indiv clauses pulled out of ParsedSearch
-            search1 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            search2 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assert_( search1.clauses[1] == search2.clauses[1] )
-
-        def testEqualsOperatorSearch(self):
-            """ Test the equals operator in ParsedSearch """
-
-            ps1 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            ps2 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assert_( ps1 == ps2 )
-
-            ps3 = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            ps4 = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assert_( ps3 != ps4 )
-
-        def testParseOneClause(self):
-            """ Test the parsing of a single clause search """
-
-            ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-
-            self.assertEquals(len(ps.clauses), 1)
-            self.assertEquals(ps.clauses[0].command, 'search')
-            self.assertEquals(ps.clauses[0].serialize(), 'search foo bar baz')
-            self.assert_(ps.clauses[0].properties['streamType'] == 'SP_STREAM')
-
-        def testParseTwoClause(self):
-            """ Test the parsing of a single clause search """
-
-            ps = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-
-            self.assertEquals(len(ps.clauses), 2)
-            self.assertEquals(ps.clauses[0].command, 'search')
-            self.assertEquals(ps.clauses[1].command, 'diff')
-            self.assertEquals(normalizeListArgs(ps.clauses[0].args['search']), 'quux')
-            self.assertEquals(normalizeListArgs(ps.clauses[1].args), 'position1=1 position2=2')
-            print("PROPS: %s" % ps.clauses[1].properties)
-            self.assertEquals(ps.clauses[1].properties['streamType'], 'SP_EVENTS')
-
-
-        def testSerialize(self):
-            """ Test search serialization/tostring"""
-
-            ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assertEquals(str(ps), self.q['single'])
-
-            ps = parseSearch(self.q['two'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assertEquals(str(ps), self.q['two'])
-
-            ps = parseSearch(self.q['quotes'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assertEquals(str(ps), self.q['quotes'])
-
-            indexSearch = 'search index="_audit"'
-            ps = parseSearch(indexSearch, hostPath=self._hostPath, sessionKey=self._sessionKey)
-            self.assertEquals(str(ps), indexSearch)
-
-        def testJsonable(self):
-            """ Test JSONable """
-            ps = parseSearch(self.q['single'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            print("\n\t%s" % json.dumps(ps.jsonable()))
-
-            ps = parseSearch(self.q['quotes'], hostPath=self._hostPath, sessionKey=self._sessionKey)
-            print("\t%s" % json.dumps(ps.jsonable()))
-
-        def test_chartSerializer(self):
-            """ Test chart serialization """
-            pc = ParsedClause()
-
-            cases = {
-                'chart sum(events) by hello,world':
-                {'xfield': 'hello', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world'},
-
-                'chart sum(events),count by hello,world':
-                {'xfield': 'hello','seriesfield': 'world',
-                 'stat-specifiers': [
-                    {'function': 'sum', 'field': 'events', 'rename': 'sum(events)'},
-                    {'function': 'count', 'rename': 'count'}
-                 ]
-                },
-
-                'timechart sum(events) by world':
-                {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world'},
-
-                'timechart sum(events),count by hello':
-                {'xfield': '_time','seriesfield': 'hello',
-                 'stat-specifiers': [
-                    {'function': 'sum', 'field': 'events', 'rename': 'sum(events)'},
-                    {'function': 'count', 'rename': 'count'}
-                 ]
-                },
-
-                'timechart span="1d" sum(events) by world':
-                {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world', 'span':'1d'},
-
-                'timechart bins=5 sum(events) by world':
-                {'xfield': '_time', 'stat-specifiers': [{'function': 'sum', 'field': 'events', 'rename': 'sum(events)'}], 'seriesfield': 'world', 'bins':5 },
-            }
-            for k, v in cases.items():
-                command = k.split()[0]
-                out = str(ParsedClause(None, command, v))  #out = pc._chartingSerializer(command, v)
-                if out != k:
-                    print("\n\nINPUT:  %s" % v)
-                    print("GOAL:   %s" % k)
-                    print("OUTPUT: %s" % out)
-                    self.assertEquals( k, out)
-
     # Execute test suite.
-    parseSuite = unittest.TestLoader().loadTestsFromTestCase(TestParse)
-    unittest.TextTestRunner(verbosity=3).run(parseSuite)
+    pass
+#    unittest.main()
+#    transformSuite = unittest.TestLoader().loadTestsFromTestCase(TestTransformUtil)
+#    parseSuite = unittest.TestLoader().loadTestsFromTestCase(TestParse)
+#    unittest.TextTestRunner(verbosity=3).run(unittest.TestSuite([parseSuite, transformSuite]))

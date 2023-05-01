@@ -17,7 +17,7 @@ import sys
 import copy
 import re
 if sys.version_info >= (3, 0):
-    from io import (BytesIO, TextIOWrapper)
+    from io import (BytesIO, TextIOWrapper, StringIO)
 else:
     from StringIO import StringIO
     BytesIO = StringIO
@@ -215,7 +215,6 @@ def outputResults(results, messages = None, fields = None, mvdelim = '\n', outpu
     if sys.version_info >= (3, 0):
         outputfile = TextIOWrapper(outputfile, encoding = 'utf-8', write_through = True)
     dw = csv.DictWriter(outputfile, h, extrasaction='ignore')
-
     dw.writerow(dict(zip(h, h)))
     dw.writerows(results)
     if sys.version_info >= (3, 0):
@@ -505,26 +504,26 @@ def getKeywordsAndOptions(charset=None):
 # Tests
 # /////////////////////////////////////////////////////////////////////////////
 
-if __name__ == '__main__':
+
     
-    import unittest
-    
-    # NOTE: cStringIO does not support unicode
-    if sys.version_info >= (3, 0):
-        from io import BytesIO
-    else:
-        from StringIO import StringIO
-        BytesIO = StringIO
+import unittest
 
-    class TestSimple(unittest.TestCase):
+# NOTE: cStringIO does not support unicode
+if sys.version_info >= (3, 0):
+    from io import BytesIO
+else:
+    from StringIO import StringIO
+    BytesIO = StringIO
 
-        def testBasicFieldChange(self):
-            '''
-            Does a basic run through of the read and output methods.
-            '''
+class TestSimple(unittest.TestCase):
 
-            # create dummy intersplunk data
-            input = u'''
+    def testBasicFieldChange(self):
+        '''
+        Does a basic run through of the read and output methods.
+        '''
+
+        # create dummy intersplunk data
+        input = u'''
 constant,sourcetype,"_time",field0,field1,source,host,"_raw",position,geometric,mval,__mv_mval
 gardener,fictional,"1203623437",0,0,\u001A\u0BC3\u1451,"HAL_9000","2008-02-21T11:50:37 POSITION 0 geometric=1 constant=gardener field0=0 field1=0",0,1,ignored,$dollar$$bill$;$bar$
 gardener,fictional,"1203622417",0,1,\u001A\u0BC3\u1451,"HAL_9000","2008-02-21T11:33:37 POSITION 1 geometric=4 constant=gardener field0=0 field1=1",1,4,ignored,$dollar$$bill$;$bar$
@@ -533,7 +532,7 @@ gardener,fictional,"1203620377",0,3,\u001A\u0BC3\u1451,"HAL_9000","2008-02-21T10
 gardener,fictional,"1203619357",0,4,\u001A\u0BC3\u1451,"HAL_9000","2008-02-21T10:42:37 POSITION 4 geometric=13 constant=gardener field0=0 field1=4",4,13,ignored,$dollar$$bill$;$bar$
 '''
 
-            expectedOutput = u'''constant,sourcetype,_time,field0,field1,source,host,_raw,position,geometric,mval,scrabble,mv1,__mv_mval,__mv_mv1
+        expectedOutput = u'''constant,sourcetype,_time,field0,field1,source,host,_raw,position,geometric,mval,scrabble,mv1,__mv_mval,__mv_mv1
 breeder,fictional,1203623437,0,0,\x1a\u0bc3\u1451,HAL_9000,2008-02-21T11:50:37 POSITION 0 geometric=1 constant=gardener field0=0 field1=0,0,1,"dollar$bill
 bar",dictionary,"a
 b",$dollar$$bill$;$bar$,$a$;$b$
@@ -551,44 +550,47 @@ bar",dictionary,"a
 b",$dollar$$bill$;$bar$,$a$;$b$
 '''
 
-            expectedOutputFields = u'''constant,sourcetype
+        expectedOutputFields = u'''constant,sourcetype
 breeder,fictional
 breeder,fictional
 breeder,fictional
 breeder,fictional
 breeder,fictional
 '''            
-            # decode intersplunk to list/dict format
-            results = readResults(BytesIO(input.encode('UTF-8')))
+        # decode intersplunk to list/dict format
+        results = readResults(StringIO(input))
 
-            # loop over events
-            for event in results:
+        # loop over events
+        for event in results:
 
-                # change existing field
-                event['constant'] = 'breeder'
+            # change existing field
+            event['constant'] = 'breeder'
 
-                # add new field
-                event['scrabble'] = 'dictionary'
+            # add new field
+            event['scrabble'] = 'dictionary'
 
-                # add a multivalued field
-                event['mv1'] = ['a', 'b']
+            # add a multivalued field
+            event['mv1'] = ['a', 'b']
 
-            # begin stdout capture
-            fake_stdout = BytesIO()
+        # begin stdout capture
+        fake_stdout = BytesIO()
+        #fake_stdout = StringIO()
+        
+        # encode result data back to intersplunk format
+        outputResults(results, outputfile=fake_stdout)
+        generatedOutput = fake_stdout.getvalue()
+        generatedOutput = generatedOutput.replace(b'\r\n', b'\n')
+        if MV_ENABLED:
+            self.assertEqual(generatedOutput.decode('UTF-8'), expectedOutput)
+
+        fake_stdout = BytesIO()
+        outputResults(results, fields=['constant', 'sourcetype'], outputfile=fake_stdout)
+        generatedOutput = fake_stdout.getvalue()
+        generatedOutput = generatedOutput.replace(b'\r\n', b'\n')
+        if MV_ENABLED:
+            self.assertEqual(generatedOutput.decode('UTF-8'), expectedOutputFields)
             
-            # encode result data back to intersplunk format
-            outputResults(results, outputfile=fake_stdout)
-            generatedOutput = fake_stdout.getvalue()
-            generatedOutput = generatedOutput.replace('\r\n', '\n')
-            if MV_ENABLED:
-                self.assertEqual(generatedOutput.decode('UTF-8'), expectedOutput)
-  
-            fake_stdout.truncate(0)
-            outputResults(results, fields=['constant', 'sourcetype'], outputfile=fake_stdout)
-            generatedOutput = fake_stdout.getvalue()
-            generatedOutput = generatedOutput.replace('\r\n', '\n')
-            if MV_ENABLED:
-                self.assertEqual(generatedOutput.decode('UTF-8'), expectedOutputFields)
-    
+            
+if __name__ == '__main__':
     # run all tests
     unittest.main()

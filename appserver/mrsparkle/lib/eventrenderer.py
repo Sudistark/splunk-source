@@ -100,68 +100,68 @@ class Custom(object):
         if fieldValue == None: return self.conf['default']
         return self.mapping[fieldValue]
 
-    
-if __name__ == '__main__':
-    
-    import unittest
-    import splunk.search as search
-    import splunk.auth as auth
-    import time
-    
-    class CustomTests(unittest.TestCase):
+import unittest
+import splunk.search as search
+import splunk.auth as auth
+import time
+from splunk.util import pytest_mark_skip_conditional
+
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class CustomTests(unittest.TestCase):
+
+
+    def testSimple(self):
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = search.dispatch('windbag', sessionKey=sessionKey)
+        time.sleep(1)
+        event = job.results[0]
+        custom = Custom(namespace='search')
+        renderer = custom.getRenderer(event.fields)
+        self.assertEquals(renderer.get('eventtype', None), '')
+        self.assertEquals(renderer.get('priority'), 0)
+        self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
+        self.assertEquals(renderer.get('css_class', None), '')
         
-        def testSimple(self):
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = search.dispatch('windbag', sessionKey=sessionKey)
-            time.sleep(1)
-            event = job.results[0]
-            custom = Custom(namespace='search')
-            renderer = custom.getRenderer(event.fields)
-            self.assertEquals(renderer.get('eventtype', None), '')
-            self.assertEquals(renderer.get('priority'), 0)
-            self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
-            self.assertEquals(renderer.get('css_class', None), '')
-            
-        def testDuplicateEventtypePriority(self):
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = search.dispatch('| windbag | eval eventtype="testeventtype"', sessionKey=sessionKey)
-            time.sleep(1)
-            event = job.results[0]
-            conf = splunk.bundle.getConf('event_renderers', sessionKey=sessionKey, namespace='search')
+    def testDuplicateEventtypePriority(self):
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = search.dispatch('| windbag | eval eventtype="testeventtype"', sessionKey=sessionKey)
+        time.sleep(1)
+        event = job.results[0]
+        conf = splunk.bundle.getConf('event_renderers', sessionKey=sessionKey, namespace='search')
 
-            conf.beginBatch()
-            conf['event_renderer_test1']['eventtype'] = 'testeventtype'
-            conf['event_renderer_test1']['priority'] = 300
-            conf['event_renderer_test1']['css_class'] = 'testclass1'
-            conf['event_renderer_test2']['eventtype'] = 'testeventtype'
-            conf['event_renderer_test2']['priority'] = 400
-            conf['event_renderer_test2']['css_class'] = 'testclass2'
-            conf.commitBatch()
-            custom = Custom(namespace='search')
-            renderer = custom.getRenderer(event.fields)
-            self.assertEquals(renderer.get('eventtype'), 'testeventtype')
-            self.assertEquals(renderer.get('priority'), 400)
-            self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
-            self.assertEquals(renderer.get('css_class'), 'testclass2')
+        conf.beginBatch()
+        conf['event_renderer_test1']['eventtype'] = 'testeventtype'
+        conf['event_renderer_test1']['priority'] = 300
+        conf['event_renderer_test1']['css_class'] = 'testclass1'
+        conf['event_renderer_test2']['eventtype'] = 'testeventtype'
+        conf['event_renderer_test2']['priority'] = 400
+        conf['event_renderer_test2']['css_class'] = 'testclass2'
+        conf.commitBatch()
+        custom = Custom(namespace='search')
+        renderer = custom.getRenderer(event.fields)
+        self.assertEquals(renderer.get('eventtype'), 'testeventtype')
+        self.assertEquals(renderer.get('priority'), 400)
+        self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
+        self.assertEquals(renderer.get('css_class'), 'testclass2')
 
-            conf.beginBatch()
-            conf['event_renderer_test1']['eventtype'] = 'testeventtype'
-            conf['event_renderer_test1']['priority'] = 500
-            conf['event_renderer_test1']['css_class'] = 'testclass1'
-            conf['event_renderer_test2']['eventtype'] = 'testeventtype'
-            conf['event_renderer_test2']['priority'] = 400
-            conf['event_renderer_test2']['css_class'] = 'testclass2'
-            conf.commitBatch()
-            custom = Custom(namespace='search')
-            renderer = custom.getRenderer(event.fields)
-            self.assertEquals(renderer.get('eventtype'), 'testeventtype')
-            self.assertEquals(renderer.get('priority'), 500)
-            self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
-            self.assertEquals(renderer.get('css_class'), 'testclass1')
+        conf.beginBatch()
+        conf['event_renderer_test1']['eventtype'] = 'testeventtype'
+        conf['event_renderer_test1']['priority'] = 500
+        conf['event_renderer_test1']['css_class'] = 'testclass1'
+        conf['event_renderer_test2']['eventtype'] = 'testeventtype'
+        conf['event_renderer_test2']['priority'] = 400
+        conf['event_renderer_test2']['css_class'] = 'testclass2'
+        conf.commitBatch()
+        custom = Custom(namespace='search')
+        renderer = custom.getRenderer(event.fields)
+        self.assertEquals(renderer.get('eventtype'), 'testeventtype')
+        self.assertEquals(renderer.get('priority'), 500)
+        self.assertEquals(renderer.get('template'), '//results/EventsViewer_default_renderer.html')
+        self.assertEquals(renderer.get('css_class'), 'testclass1')
 
+
+if __name__ == '__main__':
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(CustomTests))
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
-
-                    

@@ -14,6 +14,8 @@ import splunk.appserver.mrsparkle.lib.util as util
 import splunk.appserver.mrsparkle.lib.viewconf as viewconf
 import cherrypy
 
+from future.moves.urllib.parse import quote
+
 logger = logging.getLogger('splunk.appserver.lib.memoizedviews')
 
 # define the splunkd entity path where views are stored
@@ -63,6 +65,7 @@ class MemoizedViews(object):
         # do this in __init__() because the ViewController is created before
         # cherrypy.config is initialized in root.py.
         self.max_cache_size = VIEW_CACHE_SIZE_NOT_SET
+        self.web_settings = util.splunk_to_cherry_cfg('web', 'settings')
         logger.info("initialize MemoizeViews %s" % hash(self))
 
     def getAvailableViews(self, namespace, refresh, output, flash_ok=True):
@@ -85,7 +88,7 @@ class MemoizedViews(object):
                 parsed_view['canWrite'] = splunk.util.normalizeBoolean(digest.get('eai:acl').get('can_write'))
                 parsed_view['editUrlPath'] = dict(digest.links).get('edit')
                 parsed_view['app'] = digest.get('eai:acl').get('app')
-                parsed_view['label'] = digest.get('label', "")
+                parsed_view['label'] = digest.get('label', "") or ""
                 parsed_view['isDashboard'] = digest.get('isDashboard', 1)
                 parsed_view['isVisible'] = splunk.util.normalizeBoolean(digest.get('isVisible', True))
                 output[item] = parsed_view
@@ -99,6 +102,11 @@ class MemoizedViews(object):
         # add to the cache key when the flash_ok boolean is False, since some views will be different in this case
         if not flash_ok:
             viewdigest = viewdigest + '_flash_ok=False'
+        url_xmlv = viewconf.get_temporary_xml_load_version()
+        # Cannot use cached results if valid xmlv value changed
+        if url_xmlv is not None and url_xmlv.startswith('1.'):
+            escaped_url_xmlv = quote(url_xmlv, safe='')
+            viewdigest = '%s_xmlv=%s' % (viewdigest, escaped_url_xmlv)
         with self.views_lock:
             entry = self.digest_to_view_map.get(viewdigest)
             if entry:
@@ -127,7 +135,8 @@ class MemoizedViews(object):
                                                  flashOk=flash_ok)
                     native_view['viewEntry'] = viewobj
                 elif viewobj.get('eai:type') == "html":
-                    native_view = {'type': 'module', 'viewName': viewid, 'template': "view/dashboard_escaped_render.html", 'modules': {}, 'layoutRoster': {}, 'dashboard': viewobj.get("eai:data")}
+                    html_template = 'view/dashboard_escaped_render.html' if self.web_settings.get('enable_jQuery2', True) is True else 'view/html_dashboards_removed.html'
+                    native_view = {'type': 'module', 'viewName': viewid, 'template': html_template, 'modules': {}, 'layoutRoster': {}, 'dashboard': viewobj.get("eai:data")}
             except Exception as e:
                 native_view = {
                     "objectMode": "XMLError",

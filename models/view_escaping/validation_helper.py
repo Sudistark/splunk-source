@@ -57,22 +57,22 @@ def extractMessageLineNumber(msg):
 def normalizeMessageInformation(messages):
     return list(map(extractMessageLineNumber, messages))
 
+import unittest
 
-if __name__ == '__main__':
-    import unittest
+class ValidationHelperTests(unittest.TestCase):
+    def testExtractLineInformation(self):
+        result = extractMessageLineNumber('This is a test message (line 4711)')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['message'], 'This is a test message')
+        self.assertEqual(result['line'], 4711)
 
-    class ValidationHelperTests(unittest.TestCase):
-        def testExtractLineInformation(self):
-            result = extractMessageLineNumber('This is a test message (line 4711)')
-            self.assertIsNotNone(result)
-            self.assertEquals(result['message'], 'This is a test message')
-            self.assertEquals(result['line'], 4711)
+        result = extractMessageLineNumber('This is a test message without line info')
+        self.assertIsNotNone(result)
+        self.assertEqual(result['message'], 'This is a test message without line info')
+        self.assertIsNone(result['line'])
 
-            result = extractMessageLineNumber('This is a test message without line info')
-            self.assertIsNotNone(result)
-            self.assertEquals(result['message'], 'This is a test message without line info')
-            self.assertIsNone(result['line'])
-
+if __name__ == "__main__":
     loader = unittest.TestLoader()
     suite = [loader.loadTestsFromTestCase(case) for case in (ValidationHelperTests,)]
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suite))
+

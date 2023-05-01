@@ -7,9 +7,11 @@ import splunk
 import logging
 import logging.handlers
 import sys
+import re
 from cherrypy import expose
 from splunk.appserver.mrsparkle.lib import util
 from splunk.appserver.mrsparkle.controllers import BaseController
+from splunk.appserver.mrsparkle.lib.restricted_jquery_files_regex import get_restricted_jquery_files_regex
 
 
 # Windows specific paths which are different from *nix os's:
@@ -43,7 +45,7 @@ LOGGING_STANZA_NAME = 'python'
 LOGGING_FORMAT = "%(asctime)s %(levelname)-s\t[%(requestid)s] %(module)s:%(lineno)d - %(message)s"
 
 # Set a limit on how much data we're prepared to receive (in MB)
-DEFAULT_MAX_UPLOAD_SIZE = 500 
+DEFAULT_MAX_UPLOAD_SIZE = 500
 
 IS_CHERRYPY = True
 __main__.IS_CHERRYPY = True # root.py is not always __main__
@@ -114,7 +116,7 @@ splunk_log_handler.setFormatter(logging.Formatter(LOGGING_FORMAT))
 logger.addHandler(splunk_log_handler)
 
 # Change the default lxml parsing to not allow imported entities
-import splunk.lockdownlxmlparsing
+import splunk.safe_lxml_etree
 
 try:
     splunk.setupSplunkLogger(logger, LOGGING_DEFAULT_CONFIG_FILE, LOGGING_LOCAL_CONFIG_FILE, LOGGING_STANZA_NAME)
@@ -219,9 +221,12 @@ try:
                 return headers
 
         cherrypy._cpreqbody.Entity.part_class = UnicodePart
-    
+
     # SPL-180503: Disable cherrypy traceback to prevent internal path disclosure on exceptions
     cherrypy._cprequest.Request.show_tracebacks = False
+
+    # SPL-181139: Disable showing mismatched params in the response body to prevent leakage of headers
+    cherrypy._cprequest.Request.show_mismatched_params = False
 
     # SPL-166285
     # In CherryPy 3.1.2 all GET params in a POST were deduplicated into a flat dictionary.
@@ -229,7 +234,7 @@ try:
     # We rely too much on the 3.1.2 behavior to change to the new behavior.
     # see: https://stackoverflow.com/questions/31310705/cherrypy-combining-querystring-value-with-form-value-in-post-body
 
-    # merging request.params with body.params. 
+    # merging request.params with body.params.
     # this will prevent creating an array in request.params with same values
     def postOverride():
         if (cherrypy.request.body.params and cherrypy.request.params):
@@ -281,7 +286,7 @@ try:
             # overrides the 'dir' param with where applications are stored.
             if branch.startswith('app/'):
                 return static_app_resolver(section, branch, static_app_dir)
-            
+
             sp = os.path.splitext(branch)
             fn = os.path.join(dir, branch)
             if branch == 'js/i18n.js':
@@ -290,9 +295,10 @@ try:
                 return filechain.chain_common_js() # returns the path to a cached file containing the finished cache file
             elif branch.startswith('js/splunkjs') or branch.startswith('docs/js'):
                 return False
-            elif not branch.startswith('build') and not branch.startswith('js/contrib') and sp[1] == '.js' and os.path.exists(fn) and 'i18noff' not in cherrypy.request.query_string:
+            elif not branch.startswith('build') and not branch.startswith('js/contrib') and not branch.startswith('js/build') and sp[1] == '.js' and os.path.exists(fn) and 'i18noff' not in cherrypy.request.query_string:
                 return i18n.translate_js(fn) # returns the path to a cached file containing the original js + json translation map
             return False # fallback to the default handler
+
 
         cfg[static_endpoint] = {
             'tools.sessions.on' : False, # no session required for static resources
@@ -301,7 +307,7 @@ try:
             'tools.staticdir.strip_version' : True,
             'tools.staticdir.resolver' : static_resolver,
             'tools.staticdir.content_types' : {
-                'js' : 'application/javascript', 
+                'js' : 'application/javascript',
                 'css': 'text/css',
                 # SPL-87571: Response Headers: Content-Type: text/plain for SVG files, which should be Content-Type: image/svg+xml
                 # FYI: if there's any file type that splunk doesn't recognize, just add it here.
@@ -309,10 +315,15 @@ try:
                 'svgz': 'image/svg+xml',
                 'cache': 'text/javascript', # correct python's application/x-javascript
                 'woff': 'application/font-woff'
-            },            
+            },
             'tools.gzip.on' : True,
             'tools.gzip.mime_types' : ['text/plain', 'text/html', 'text/css', 'application/javascript', 'application/x-javascript', 'text/javascript']
         }
+
+        # Based on enable_jQuery2 flag, jQuery 2 assets are accessible through Splunk Web.
+        if global_cfg.get('enable_jQuery2', True) is False:
+            logger.info("jQuery 2 assets restricted")
+            cfg[static_endpoint]['tools.staticdir.match'] = get_restricted_jquery_files_regex()
 
         ctrl.robots_txt = cherrypy.tools.staticfile.handler(os.path.join(staticdir, 'robots.txt'))
         ctrl.favicon_ico = cherrypy.tools.staticfile.handler(os.path.join(staticdir, 'img', util.getFaviconFileName()))
@@ -374,7 +385,7 @@ try:
             logger.setLevel(logging.DEBUG)
             for lname, litem in list(logger.manager.loggerDict.items()):
                 if not isinstance(litem, logging.PlaceHolder):
-                    logger.debug("Updating logger=%s to level=DEBUG" % lname)   
+                    logger.debug("Updating logger=%s to level=DEBUG" % lname)
                     litem.setLevel(logging.DEBUG)
             args['js_logger_mode'] = 'Server'
             args['enableWebDebug'] = True
@@ -456,7 +467,7 @@ try:
             logger.info('Enforcing secure session cookie without Splunk Web SSL.')
             global_cfg['tools.sessions.secure'] = True
         else:
-            # make sure the secure flag is not set on session cookies if we're not serving over SSL and 
+            # make sure the secure flag is not set on session cookies if we're not serving over SSL and
             # tools.sessions.forceSecure is not set to True
             global_cfg['tools.sessions.secure'] = False
 
@@ -483,12 +494,12 @@ try:
         if 'log.error_maxsize' in global_cfg:
             splunk_log_handler.maxBytes = int(global_cfg['log.error_maxsize'])
             splunk_log_handler.backupCount = int(global_cfg.get('log.error_maxfiles', 5))
-            
+
         # now that we have somewhere to log, test the ssl keys. - SPL-34126
         # Lousy solution, but python's ssl itself hangs with encrypted keys, so avoid hang by
         # bailing with a message
         if global_cfg['enableSplunkWebSSL']:
-            for cert_file in (global_cfg['server.ssl_private_key'], 
+            for cert_file in (global_cfg['server.ssl_private_key'],
                               global_cfg['server.ssl_certificate']):
                 if is_encrypted_cert(cert_file):
                     logger.error("""Specified cert '%s' is encrypted with a passphrase.  SplunkWeb does not support passphrase-encrypted keys at this time.  To resolve the problem, decrypt the keys on disk, generate new
@@ -501,9 +512,9 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
 
         # set mako template cache directory
         global_cfg.setdefault('mako_cache_path', MAKO_CACHE_PATH)
-        
+
         root_name = global_cfg.get('root_endpoint', FAILSAFE_ROOT_ENDPOINT).strip('/')
-        
+
         ctrl = TopController()
         cfg = {'global' : global_cfg}
 
@@ -515,7 +526,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         # Serve static files if so configured
         if 'static_endpoint' in global_cfg:
             mount_static(ctrl, global_cfg, cfg)
-        
+
         if 'testing_endpoint' in global_cfg:
             if (global_cfg.get('static_dir', '') == '') :
                 logger.warn('testing endpoint configured, but no testing directory. Falling back to ' + FAILSAFE_TESTING_DIR)
@@ -526,7 +537,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
                 'tools.staticdir.dir' : staticdir,
                 'tools.staticdir.strip_version' : True
             }
-        
+
         if 'rss_endpoint' in global_cfg:
             rssdir = make_absolute(global_cfg.get('rss_dir', FAILSAFE_RSS_DIR), '')
             logger.debug('using rss_dir: %s' % rssdir)
@@ -537,7 +548,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
                 'tools.staticdir.default_ext' : 'xml',
                 'error_page.404': make_splunkhome_path([FAILSAFE_STATIC_DIR, 'html', 'rss_404.html'])
             }
-            
+
 
         # Modules served statically out of /modules or out of an app's modules dir
         def module_resolver(section, branch, dir):
@@ -558,7 +569,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
                 else:
                     fn = os.path.join(module_path, *parts[1:])
                 #verified while fixing SPL-47422
-                #pylint: disable=E1103 
+                #pylint: disable=E1103
                 if fn.endswith('.js') and os.path.exists(fn):
                     return i18n.translate_js(fn) # returns the path to a cached file containing the original js + json translation map
                 return fn
@@ -601,7 +612,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
             from splunk.appserver.mrsparkle.lib import throttle
             cfg['global'].update({
                 'tools.throttle.on' : True,
-                'tools.throttle.bandwidth': int(global_cfg.get('throttle_bandwidth', 50)), 
+                'tools.throttle.bandwidth': int(global_cfg.get('throttle_bandwidth', 50)),
                 'tools.throttle.latency': int(global_cfg.get('throttle_latency', 100))
             })
 
@@ -629,7 +640,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         #
         # process splunkd status information
         #
-        
+
         startup.initVersionInfo()
 
         # set start time for restart checking
@@ -653,7 +664,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         except TypeError as e:
             logger.error("Exception while trying to get splunkdConnectionTimeout from web.conf e=%s" % e)
             splunk.rest.SPLUNKD_CONNECTION_TIMEOUT = defaultSplunkdConnectionTimeout
-        finally:    
+        finally:
             logger.info("splunkdConnectionTimeout=%s" % splunk.rest.SPLUNKD_CONNECTION_TIMEOUT)
 
         #
@@ -661,13 +672,13 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         #
         cfg['global']['DISPATCH_TIME_FORMAT'] = '%s.%Q'
         # END
-        
-        
+
+
         # Common splunk paths
         cfg['global']['etc_path'] = make_absolute(SPLUNK_ETC_PATH)
         cfg['global']['site_packages_path'] = make_absolute(SPLUNK_SITE_PACKAGES_PATH)
         cfg['global']['mrsparkle_path'] = make_absolute(SPLUNK_MRSPARKLE_PATH)
-        
+
         listen_on_ipv6 = global_cfg.get('listenOnIPv6')
         socket_host = global_cfg.get('server.socket_host')
         if not socket_host:
@@ -709,7 +720,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         if global_cfg.get('enable_profile', False):
             from cherrypy.lib import profiler
             cherrypy.tree.graft(
-                profiler.make_app(cherrypy.Application(ctrl, '/' + root_name, cfg), 
+                profiler.make_app(cherrypy.Application(ctrl, '/' + root_name, cfg),
                 path=global_cfg.get('profile_path', '/tmp/profile')), '/' + root_name
                 )
         else:
@@ -720,7 +731,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         if splunk.clilib.cli_common.isWindows:
             from cherrypy.process import win32
             cherrypy.console_control_handler = win32.ConsoleCtrlHandler(cherrypy.engine)
-            cherrypy.engine.console_control_handler.subscribe() 
+            cherrypy.engine.console_control_handler.subscribe()
 
         if 'server_info_fetch' in cherrypy.config:
             del cherrypy.config['server_info_fetch']
@@ -732,7 +743,7 @@ passphrase-less keys, or disable ssl for SplunkWeb.""" % cert_file)
         # clean up caches on init
         filechain.clear_cache()
         i18n.init_i18n_cache(flush_files=True)
- 
+
         # We're under the control of the proxy and we want to automatically shutdown
         # as soon as stdin closes since that indicates that splunkd died
         # We also receive a single line of text at startup which gives us a token

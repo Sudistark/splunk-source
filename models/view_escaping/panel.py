@@ -43,31 +43,31 @@ class Panel(object):
         else:
             return False
 
+import unittest
 
-if __name__ == '__main__':
+class PanelTests(unittest.TestCase):
 
-    import unittest
+    def testAddOnePanel(self):
+        panel = Panel()
+        self.assertTrue(panel.appendPanelElement({}))
+        self.assertFalse(panel.appendPanelElement({}))
 
-    class PanelTests(unittest.TestCase):
+    def testAddTwoPanel(self):
+        panel = Panel(2)
+        self.assertTrue(panel.appendPanelElement({}))
+        self.assertTrue(panel.appendPanelElement({}))
+        self.assertFalse(panel.appendPanelElement({}))
 
-        def testAddOnePanel(self):
-            panel = Panel()
-            self.assertTrue(panel.appendPanelElement({}))
-            self.assertFalse(panel.appendPanelElement({}))
+    def testAddAny(self):
+        panel = Panel(None)
+        self.assertTrue(panel.appendPanelElement({}))
+        self.assertTrue(panel.appendPanelElement({}))
+        self.assertTrue(panel.appendPanelElement({}))
 
-        def testAddTwoPanel(self):
-            panel = Panel(2)
-            self.assertTrue(panel.appendPanelElement({}))
-            self.assertTrue(panel.appendPanelElement({}))
-            self.assertFalse(panel.appendPanelElement({}))
 
-        def testAddAny(self):
-            panel = Panel(None)
-            self.assertTrue(panel.appendPanelElement({}))
-            self.assertTrue(panel.appendPanelElement({}))
-            self.assertTrue(panel.appendPanelElement({}))
-
+if __name__ == "__main__":
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(PanelTests))
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
+

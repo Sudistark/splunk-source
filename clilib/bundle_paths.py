@@ -23,6 +23,12 @@ import socket
 import re
 import ssl
 
+# SPL-176675: import importlib.util gracefully
+try:
+    import importlib.util as importlib_util
+except ImportError:
+    importlib_util = None
+
 join = os.path.join
 
 def _bundle_error(msg):
@@ -57,6 +63,22 @@ def get_shared_etc():
     as we do not traditionally make guarantees about clilib.
     """
     return etc()
+
+def get_module_from_file(name, location):
+    ''' Helper for explicit imports
+    @param name - module name
+    @param location - path to file for ModuleSpec instance
+
+    @return None (python2)
+    @return module (python3)
+    '''
+    if importlib_util is None:
+        return None
+
+    spec = importlib_util.spec_from_file_location(name, location)
+    module = importlib_util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 #
 # Bundle-related constants (accessed through functions)

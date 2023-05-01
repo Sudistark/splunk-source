@@ -45,7 +45,7 @@ if sys.version_info >= (3, 0):
     from io import StringIO
 else:
     from cStringIO import StringIO
-import lxml.etree as etree
+import splunk.safe_lxml_etree as etree
 import socket
 import subprocess
 
@@ -638,6 +638,7 @@ cList.addCmd(SplunkCmd("rolling-restart", "shcluster-members", None, None))
 cList.addCmd(SplunkCmd("rolling-restart", "cluster-peers", None, None))
 cList.addCmd(SplunkCmd("upgrade-init", "cluster-peers", None, None))
 cList.addCmd(SplunkCmd("upgrade-finalize", "cluster-peers", None, None))
+cList.addCmd(SplunkCmd("remove", "cluster-search-heads", None, authReq = True))
 
 def logCmdFailed(cmd, subCmd, args):
     eType, eValue = sys.exc_info()[0:2]
@@ -676,7 +677,7 @@ def parseAndRun(argsList):
   #### EAI CLI ####
   global run_local
   #######
-  command = argsList[1].lower()
+  command = argsList[1]
   if not cList.hasCmd(command):
      question = didYouMean(command)
      if question == None:
@@ -841,6 +842,11 @@ def parseAndRun(argsList):
     logger.debug(str.join(str("\n"), ["  \"%s\" = \"%s\"" % (arg, val) for arg, val in argList.items()]))
     logger.debug("End parsed arguments.\n\n")
 
+    # SPL-138676: Prompt for a remotePassword if not provided via CLI.
+    if "remoteUsername" in argList and "remotePassword" not in argList:
+        # prompt for a remotePassword if remoteUsername is present but remotePassword is not
+        remotePassword = comm.promptPassword("remotePassword: ")
+        argList["remotePassword"] = remotePassword
     #
     # Does this command require the pro server?
     # it doesn't matter what the default here is, just setting it True.

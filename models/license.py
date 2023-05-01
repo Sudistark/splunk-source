@@ -27,6 +27,7 @@ class License(SplunkAppObjModel):
     type                = Field()
     window_period       = IntField()
     is_unlimited        = BoolField()
+    notes               = Field()
 
 
 
@@ -41,6 +42,9 @@ class Stack(SplunkAppObjModel):
     label           = Field()
     quota_bytes     = FloatField(api_name='quota')
     type            = Field()
+    cle_active      = BoolField()
+    window_period   = IntField()
+    max_violations      = IntField()
     
 
 

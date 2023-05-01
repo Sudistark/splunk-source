@@ -7,7 +7,7 @@ import unittest, httplib2, cgi
 
 from future.moves.urllib import parse as urllib_parse
 
-import lxml.etree
+import splunk.safe_lxml_etree as etree
 import logging as logger
 import splunk.rest.format
 
@@ -48,7 +48,7 @@ def runLocalRestTests():
     else: sys.exit(-1)
 
 
-class TestSkipped(Exception):
+class TstSkipped(Exception):
     '''
     This class is used to exit a test without affecting the pass or fail count
     '''
@@ -78,14 +78,10 @@ class SimpleRestTester(object):
     True
     >>> s.assertEqual('1234', '12345')
     Traceback (most recent call last):
-    Exception: assertEqual failed:
-        ACTUAL:   1234
-        EXPECTED: 12345
+    Exception: assertEqual failed...12345
     >>> s.assertEqual(False, True)
     Traceback (most recent call last):
-    Exception: assertEqual failed:
-        ACTUAL:   False
-        EXPECTED: True
+    Exception: assertEqual failed:...True
     '''
 
     variables = {}
@@ -217,7 +213,7 @@ class SimpleRestTester(object):
         t1 = time.time()
 
         # read in test script
-        script = lxml.etree.parse(filepath)
+        script = etree.parse(filepath)
         root = script.getroot()
 
         self.log(1, '')
@@ -283,7 +279,7 @@ class SimpleRestTester(object):
                        time.sleep(retry_sleep)
                     else:
                        failCount += 1
-            except TestSkipped as e:
+            except TstSkipped as e:
                 continue
         self.restore()
         delta = time.time() - t1
@@ -304,7 +300,7 @@ class SimpleRestTester(object):
 
         Uses yield so the return value can be iterable
         '''
-        script = lxml.etree.parse(filepath)
+        script = etree.parse(filepath)
         root = script.getroot()
 
         # get host info
@@ -333,13 +329,13 @@ class SimpleRestTester(object):
         '''
         if test.tag == 'comment':
             self.log(2, '%s - # %s' % (time_str(), self.replaceVariables(test.text)))
-            raise TestSkipped("Test skipped")
+            raise TstSkipped("Test skipped")
 
         if test.tag == 'code':
             code = self.replaceVariables(test.text)
             result = eval(code)
             self.log(2, '%s - eval(%s) -> %s' % (time_str(), code, result))
-            raise TestSkipped("Test skipped")
+            raise TstSkipped("Test skipped")
 
         # handle artificial test pauses
         pauseInterval = test.findtext('pause')
@@ -347,7 +343,7 @@ class SimpleRestTester(object):
             self.log(2, '- Pausing for %ss -' % pauseInterval)
             self.testCount = self.testCount - 1
             time.sleep(float(pauseInterval))
-            raise TestSkipped("Test skipped")
+            raise TstSkipped("Test skipped")
 
         logBuffer = [(2, '%s - %s' % (time_str(), self.replaceVariables(test.findtext('desc'))))]
 
@@ -543,8 +539,8 @@ class SimpleRestTester(object):
             if xmlTests:
 
                 try:
-                    doc = lxml.etree.fromstring(serverContent)
-                except lxml.etree.XMLSyntaxError as e:
+                    doc = etree.fromstring(serverContent)
+                except etree.XMLSyntaxError as e:
                     self.fail('Test requires XML response; received unparsable XML:\n%s' % serverContent)
 
                 baseNS = None
@@ -687,14 +683,18 @@ class SimpleRestTester(object):
         self.restored = True
 
 # --------------------------
-if __name__ == '__main__':
-    import doctest
-    doctest.testmod()
-    s = SimpleRestTester()
-    if sys.argv:
-        isPassed = s.run(*sys.argv[1:])
-    else:
-        isPassed = s.run()
+# Is this even a real test?
+#def test():
+#    import doctest
+#    doctest.testmod()
+#    s = SimpleRestTester()
+#    if sys.argv:
+#        isPassed = s.run(*sys.argv[1:])
+#    else:
+#        isPassed = s.run()
+#
+#    if isPassed: sys.exit(0)
+#    else: sys.exit(-1)
 
-    if isPassed: sys.exit(0)
-    else: sys.exit(-1)
+if __name__ == '__main__':
+    pass

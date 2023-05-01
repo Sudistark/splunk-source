@@ -5,7 +5,7 @@ from builtins import object
 
 import json
 import logging
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import re
 import sys
 from gettext import gettext as _
@@ -278,7 +278,7 @@ def createRowFromXml(rowNode, sourceApp=None):
     row.id = rowNode.get('id')
 
     if len(rowNode) is 0:
-        logger.warn('Dashboard row is empty (line %d)', rowNode.sourceline)
+        logger.warning('Dashboard row is empty (line %d)', rowNode.sourceline)
 
     else:
         hasPanels = False
@@ -312,7 +312,7 @@ def createPanelFromXML(panelNode, sourceApp=None):
     panel.id = panelNode.get('id', None)
 
     if len(panelNode) is 0:
-        logger.warn('Dashboard panel is empty (line %d)', panelNode.sourceline)
+        logger.warning('Dashboard panel is empty (line %d)', panelNode.sourceline)
 
     ref = panelNode.get('ref', None)
     if ref:
@@ -383,7 +383,7 @@ def createPanelElementFromXml(panelElementNode):
     def createChartPanelElementFromXml(node, element):
         createDefaultPanelElementFromXml(node, element)
         selectionNode = node.find('selection')
-        if selectionNode:
+        if selectionNode is not None:
             element.selection = []
             for actionNode in [node for node in selectionNode if et.iselement(node) and isinstance(node.tag, str)]:
                 action = parseDrilldownAction(actionNode)
@@ -548,623 +548,622 @@ def createPanelElementFromXml(panelElementNode):
         createDefaultPanelElementFromXml(panelElementNode, panelInstance)
     return panelInstance
 
+import unittest
 
-if __name__ == '__main__':
-    import unittest
+def getRowXml(args='', panels=1):
+    nodes = ['<row %(args)s>']
+    for i in range(0, panels):
+        nodes.append('<single></single>')
+    nodes.append('</row>')
+    xml = ''.join(nodes)
+    return xml % {'args': args}
 
-    def getRowXml(args='', panels=1):
-        nodes = ['<row %(args)s>']
-        for i in range(0, panels):
-            nodes.append('<single></single>')
-        nodes.append('</row>')
-        xml = ''.join(nodes)
-        return xml % {'args': args}
+def getPanelElementXml(type="foo", options=None, args=None):
+    options = options or (
+        '<searchString> | metadata type="sources" | '
+        'stats count</searchString>')
+    args = args or ''
+    xml = '''
+        <%(type)s %(args)s>
+            %(options)s
+        </%(type)s>
+    '''
+    return xml % {'type': type, 'options': options, 'args': args}
 
-    def getPanelElementXml(type="foo", options=None, args=None):
-        options = options or (
-            '<searchString> | metadata type="sources" | '
-            'stats count</searchString>')
-        args = args or ''
+class CreatePanelElementTests(unittest.TestCase):
+
+    def createPanel(self, type="foo", options=None, args=None):
+        xml = getPanelElementXml(type, options, args)
+        root = et.fromstring(xml)
+        return createPanelElementFromXml(root)
+
+    def testCreateUnknownPanel(self):
+        with self.assertRaises(NotImplementedError):
+            d = self.createPanel('foo')
+
+    def testCreateAllowedPanels(self):
+        for panelType in ['single', 'chart', 'table',
+                          'html', 'map', 'event', 'list', 'viz']:
+            d = self.createPanel(panelType)
+            self.assertTrue(d.matchTagName == panelType)
+
+    def testCreateHTMLPanel(self):
+        d = self.createPanel(
+            'html', args='src="/foo/bar"')
+        self.assertTrue(d.options.get('serverSideInclude') == '/foo/bar')
+        self.assertFalse(d.options.get('rawcontent'))
+        d = self.createPanel(
+            'html', options='<div>Test</div>', args='src="/foo/bar"')
+        self.assertTrue(d.options.get('serverSideInclude') == '/foo/bar')
+        self.assertFalse(d.options.get('rawcontent'))
+        d = self.createPanel(
+            'html', options='<div>Test</div>')
+        self.assertFalse(d.options.get('serverSideInclude'))
+        self.assertEqual(d.options.get('rawcontent'), '<div>Test</div>')
+
+    def testCreateTablePanel(self):
+        """tables only have special format fields"""
+        d = self.createPanel('table', options='''
+            <format>
+                <option name="fff">
+                    <list>foo</list>
+                    <list>bop</list>
+                </option>
+                <option name="bippity">
+                    <option name="bippity">bop</option>
+                </option>
+            </format>
+            <format field="foobar" type="num">
+                <option name="fff">
+                    <list>foo</list>
+                    <list>bop</list>
+                </option>
+                <option>bar</option>
+            </format>
+            ''')
+        self.assertTrue(d.fieldFormats == { # pylint: disable=E1103
+            '*': [{'type': 'text',
+                   'options': {'bippity': {'bippity': 'bop'},
+                               'fff': ['foo', 'bop']
+                   }
+                  }],
+            'foobar': [{'type': 'num',
+                        'options': {None: 'bar',
+                                    'fff': ['foo', 'bop']
+                        }
+                       }]
+        })
+        #  formats can't mix options and lists.
+        #  lists can contain options and options can contain list but
+        #     neither can contain both.
+        with self.assertRaises(ValueError):
+            d = self.createPanel(
+                'table',
+                options='''
+                    <format>
+                        <option name="fff">
+                            <list>foo</list>
+                            <list>bop</list>
+                            <option name="should">not work</option>
+                        </option>
+                        <option>bar</option>
+                    </format>
+                ''')
+
+    def testCreateChartPanelWithSelection(self):
+        chart = self.createPanel('chart', options='''
+            <selection>
+                <set token="foo">$start$</set>
+                <unset token="bar" />
+            </selection>
+            ''')
+
+        self.assertIsNotNone(chart.selection)
+        self.assertEqual(2, len(chart.selection))
+        self.assertEqual("settoken", chart.selection[0].type)
+        self.assertEqual("unsettoken", chart.selection[1].type)
+
+    def testCreateCustomVizPanel(self):
+        customViz = self.createPanel('viz', args='type="testapp.testviz"')
+        self.assertTrue(customViz.type == 'testapp.testviz')
+
+
+    def testCreateDefaultPanel(self):
+        """All panels have some things in common"""
+        #s test common nodes
+        d = self.createPanel('single', options='''
+            <title>Title1</title>
+            <searchString>search string</searchString>
+            <earliestTime>0</earliestTime>
+            <latestTime>50</latestTime>
+            <fields>foo bar baz</fields>
+            ''')
+        self.assertEqual(d.search.earliestTime, '0')
+        self.assertEqual(d.search.latestTime, '50')
+        self.assertEqual(d.title, 'Title1')
+        self.assertEqual(d.searchFieldList, 'foo bar baz'.split())
+
+        # should be able to accept one of the search modes
+        d = self.createPanel('single', options='''
+            <searchString>search string</searchString>
+            ''')
+        self.assertTrue(hasattr(d, 'search'),  'panel elements should have a search object')
+        self.assertEqual(getattr(d.search, 'searchMode'), 'template')
+        self.assertEqual(getattr(d.search, 'searchCommand'), 'search string')
+        d = self.createPanel('single', options='''
+            <searchName>search saved</searchName>
+            <searchTemplate>search template</searchTemplate>
+            <searchPostProcess>search postsearch</searchPostProcess>
+            ''')
+        self.assertEqual(getattr(d.search, 'searchMode'), 'saved')
+        self.assertEqual(getattr(d.search, 'searchCommand'), 'search saved')
+        d = self.createPanel('single', options='''
+            <searchTemplate>search template</searchTemplate>
+            ''')
+        self.assertEqual(getattr(d.search, 'searchMode'), 'template')
+        self.assertEqual(getattr(d.search, 'searchCommand'), 'search template')
+        d = self.createPanel('single', options='''
+            <searchPostProcess>search postsearch</searchPostProcess>
+            ''')
+        self.assertEqual(getattr(d.search, 'searchMode'), 'postsearch')
+        self.assertEqual(getattr(d.search, 'searchCommand'), 'search postsearch')
+        self.assertEqual(getattr(d.search, 'baseSearchId'), 'global')
+
+        # Options should not override internal settings
+        d = self.createPanel('chart', options='''
+            <option name="id">xyz</option>
+            <option name="managerid">abc</option>
+            <option name="el">abc</option>
+            <option name="tokenDependencies">abc</option>
+            <option name="resizable">False</option>
+            ''')
+
+        for option in d.options:
+            if option in ['id', 'el', 'managerid', 'tokenDependencies', 'resizable']:
+                self.assertTrue(False, 'Options should not override internal settings')
+
+    def testCreateSavedSearch(self):
+        """All panels have some things in common"""
+        #s test common nodes
+        d = self.createPanel('single', options='''
+            <title>Title1</title>
+            <search ref="search"/>
+            ''')
+        self.assertEqual(d.search.searchCommand, 'search')
+
+
+    def testTokenDependencies(self):
+        for panelType in ('table', 'chart', 'single', 'map', 'list', 'html'):
+            panel = createPanelElementFromXml(et.fromstring('''
+                <%(type)s depends="$foo$">
+                </%(type)s>
+            ''' % dict(type=panelType)))
+            self.assertIsNotNone(panel)
+            self.assertIsNotNone(panel.tokenDeps)
+            self.assertEqual(panel.tokenDeps.depends, '$foo$')
+            self.assertEqual(panel.tokenDeps.rejects, '')
+
+            panel = createPanelElementFromXml(et.fromstring('''
+                <%(type)s rejects="$foo$">
+                </%(type)s>
+            ''' % dict(type=panelType)))
+            self.assertIsNotNone(panel)
+            self.assertIsNotNone(panel.tokenDeps)
+            self.assertEqual(panel.tokenDeps.rejects, '$foo$')
+            self.assertEqual(panel.tokenDeps.depends, '')
+
+            panel = createPanelElementFromXml(et.fromstring('''
+                <%(type)s id="foo" depends="$foo$" rejects="$bar$">
+                </%(type)s>
+            ''' % dict(type=panelType)))
+            self.assertIsNotNone(panel)
+            self.assertIsNotNone(panel.tokenDeps)
+            self.assertEqual(panel.tokenDeps.depends, '$foo$')
+            self.assertEqual(panel.tokenDeps.rejects, '$bar$')
+
+            panel = createPanelElementFromXml(et.fromstring('''
+                <%(type)s>
+                </%(type)s>
+            ''' % dict(type=panelType)))
+            self.assertIsNotNone(panel)
+            self.assertIsNone(panel.tokenDeps)
+
+            panel = createPanelElementFromXml(et.fromstring('''
+                <%(type)s depends="" rejects="">
+                </%(type)s>
+            ''' % dict(type=panelType)))
+            self.assertIsNotNone(panel)
+            self.assertIsNone(panel.tokenDeps)
+
+            dashboard = createDashboardFromXml(et.fromstring('''
+                <form>
+                
+                    <fieldset>
+                        <input token="foobar" rejects="$foobar$" />
+                    </fieldset>
+                
+                    <row depends="$foobar$">
+                        <panel rejects="$foobar$">
+                            <chart depends="$x$" rejects="$y$">
+                            
+                            </chart>
+                        </panel>
+                    </row>
+                </form>
+            '''))
+
+            self.assertIsNotNone(dashboard.rows[0].tokenDeps)
+            self.assertEqual(dashboard.rows[0].tokenDeps.depends, "$foobar$")
+            self.assertEqual(dashboard.rows[0].tokenDeps.rejects, "")
+            self.assertIsNotNone(dashboard.rows[0].panels[0].tokenDeps)
+            self.assertEqual(dashboard.rows[0].panels[0].tokenDeps.depends, "")
+            self.assertEqual(dashboard.rows[0].panels[0].tokenDeps.rejects, "$foobar$")
+            self.assertIsNotNone(dashboard.rows[0].panels[0].tokenDeps)
+            self.assertEqual(dashboard.rows[0].panels[0].tokenDeps.depends, "")
+            self.assertEqual(dashboard.rows[0].panels[0].tokenDeps.rejects, "$foobar$")
+            self.assertIsNotNone(dashboard.rows[0].panels[0].panelElements[0].tokenDeps)
+            self.assertEqual(dashboard.rows[0].panels[0].panelElements[0].tokenDeps.depends, "$x$")
+            self.assertEqual(dashboard.rows[0].panels[0].panelElements[0].tokenDeps.rejects, "$y$")
+            self.assertIsNotNone(dashboard.fieldset[0].tokenDeps)
+            self.assertEqual(dashboard.fieldset[0].tokenDeps.depends, "")
+            self.assertEqual(dashboard.fieldset[0].tokenDeps.rejects, "$foobar$")
+            dashboard = createDashboardFromXml(et.fromstring('''
+                <form>
+
+                    <fieldset>
+                        <input token="multiselect" type="multiselect" rejects="$foobar$">
+                            <search ref="foo"/>
+                        </input>
+                    </fieldset>
+
+                    <row depends="$foobar$">
+                        <panel rejects="$foobar$">
+                            <chart depends="$x$" rejects="$y$">
+
+                            </chart>
+                        </panel>
+                    </row>
+                </form>
+            '''))
+            self.assertEqual(dashboard.fieldset[0].search.searchCommand, "foo")
+
+
+    def testSimpleDrilldownPopulated(self):
+        for panelType in ('table', 'chart', 'single', 'map', 'list'):
+            xmlNode = et.fromstring('''
+                <%(type)s id="panel1">
+                    <title>Panel 1</title>
+                    <drilldown>
+                        <set token="foobar">($click.value$)</set>
+                    </drilldown>
+                </%(type)s>
+            ''' % dict(type=panelType))
+            panel = createPanelElementFromXml(xmlNode)
+            self.assertIsNotNone(panel)
+            self.assertEqual(len(panel.simpleDrilldown), 1)
+
+class _findPrimarySearchNodeTests(unittest.TestCase):
+    def testAnnotationBeforePrimary(self):
+        chart = et.fromstring('''
+          <chart>
+            <title>test_chart_annotation_pdf_printing</title>
+            <search type="annotation">
+              <query>index=_internal (log_level="WARN" OR log_level="ERROR" OR log_level="INFO") | eval annotation_label = "Category is" | eval annotation_category = log_level | table _time annotation_label annotation_category</query>
+              <earliest>-1m@m</earliest>
+              <latest>now</latest>
+            </search>
+            <search>
+              <query>index=_internal | timechart count</query>
+              <earliest>-1m@m</earliest>
+              <latest>now</latest>
+            </search>
+            <option name="charting.annotation.categoryColors">{"ERROR":"0xFF0000","WARN":"0x0000FF", "INFO": "0x008000"}</option>
+            <option name="charting.chart">area</option>
+          </chart>
+        ''')
+        primary = _findPrimarySearchNode(chart)
+        self.assertIsNone(primary.get('type'), 'primary search type')
+        self.assertEqual(primary.findtext('query'), 'index=_internal | timechart count', 'primary search type')
+
+    def test_isPrimarySearchNode(self):
+        primaryNode = et.fromstring('''
+            <search type="primary">
+              <query>index=_internal | timechart count</query>
+              <earliest>-1m@m</earliest>
+              <latest>now</latest>
+            </search>
+        ''')
+        self.assertTrue(_isPrimarySearchNode(primaryNode))
+
+        defaultNode = et.fromstring('''
+            <search>
+              <query>index=_internal | timechart count</query>
+              <earliest>-1m@m</earliest>
+              <latest>now</latest>
+            </search>
+        ''')
+        self.assertTrue(_isPrimarySearchNode(defaultNode))
+
+        annotationNode = et.fromstring('''
+            <search type="annotation">
+              <query>index=_internal (log_level="WARN" OR log_level="ERROR" OR log_level="INFO") | eval annotation_label = "Category is" | eval annotation_category = log_level | table _time annotation_label annotation_category</query>
+              <earliest>-1m@m</earliest>
+              <latest>now</latest>
+            </search>
+        ''')
+        self.assertFalse(_isPrimarySearchNode(annotationNode))
+
+class CreatePanelTests(unittest.TestCase):
+    def getPanel(self, xml='<panel></panel>'):
+        root = et.fromstring(xml)
+        return createPanelFromXML(root)
+
+    def testEmptyPanel(self):
+        self.assertTrue(isinstance(self.getPanel(), Panel), '')
+
+    def testPanelId(self):
+        panel = self.getPanel(xml='<panel id="foo"></panel>')
+        self.assertTrue(isinstance(panel, Panel), 'Panel should exist')
+        self.assertEqual(panel.id, "foo", 'Panel should have id=foo')
+
+    def testPanelMultipleSearches(self):
+        """Extract new search format and multiple searches"""
+        #s test common nodes
+        d = self.getPanel(xml='''
+        <panel>
+            <search id="panel_search">
+                <query>search string also</query>
+                <earliest>-15m</earliest>
+                <latest>now</latest>
+            </search>
+            <search base="panel_search">
+                <query>search postsearch</query>
+            </search>
+        </panel>
+        ''')
+        self.assertEqual(len(d.searches), 2)
+        self.assertEqual(getattr(d.searches[0], 'searchMode'), 'template')
+        self.assertEqual(getattr(d.searches[0], 'searchCommand'), 'search string also')
+        self.assertEqual(getattr(d.searches[0], 'id'), 'panel_search')
+        self.assertEqual(getattr(d.searches[0], 'latestTime'), 'now')
+        self.assertEqual(getattr(d.searches[0], 'earliestTime'), '-15m')
+        self.assertEqual(getattr(d.searches[1], 'searchMode'), 'postsearch')
+        self.assertEqual(getattr(d.searches[1], 'searchCommand'), 'search postsearch')
+        self.assertEqual(getattr(d.searches[1], 'baseSearchId'), 'panel_search')
+
+    def testPanelSavedSearch(self):
+        """Extract new search format saved search"""
+        d = self.getPanel(xml='''
+        <panel>
+            <search ref="panel_search"/>
+        </panel>
+        ''')
+        self.assertEqual(len(d.searches), 1)
+        self.assertEqual(getattr(d.searches[0], 'searchMode'), 'saved')
+        self.assertEqual(getattr(d.searches[0], 'searchCommand'), 'panel_search')
+
+class CreateRowTests(unittest.TestCase):
+    def getRowLxml(self, args='', panels=1):
+        xml = getRowXml(args, panels)
+        root = et.fromstring(xml)
+        return createRowFromXml(root)
+
+    def testCreateRow(self):
+        d = self.getRowLxml()
+        self.assertTrue(d)
+        self.assertEqual(len(d.panels), 1)
+        self.assertEqual(
+            d.panels[0].panelElements[0].matchTagName, 'single')
+
+    def testRowGrouping(self):
+        d = self.getRowLxml(args='grouping="2,1"', panels=3)
+        self.assertTrue(d)
+        self.assertEqual(len(d.panels), 2)
+        self.assertEqual(len(d.panels[0].panelElements), 2)
+        self.assertEqual(len(d.panels[1].panelElements), 1)
+
+    def testRowId(self):
+        d = self.getRowLxml(args='id="foo"')
+        self.assertTrue(d)
+        self.assertEqual(d.id, "foo", "Row Id should be foo")
+
+    def testCreateRowWith3Panels(self):
+        d = self.getRowLxml(args='', panels=3)
+        self.assertTrue(d)
+        self.assertEqual(len(d.panels), 3)
+
+    def testCreateRowWithPanels(self):
         xml = '''
-            <%(type)s %(args)s>
-                %(options)s
-            </%(type)s>
-        '''
-        return xml % {'type': type, 'options': options, 'args': args}
+                <row>
+                    <panel>
+                        <single/>
+                    </panel>
+                </row>
+            '''
+        root = et.fromstring(xml)
+        d =  createRowFromXml(root)
+        self.assertTrue(d)
+        self.assertEqual(len(d.panels), 1)
+        self.assertEqual(
+            d.panels[0].panelElements[0].matchTagName, 'single')
 
-    class CreatePanelElementTests(unittest.TestCase):
+    def testRowGroupingWithPanels(self):
+        xml = '''
+                <row>
+                    <panel>
+                        <single/>
+                        <single/>
+                    </panel>
+                    <panel>
+                        <single/>
+                    </panel>
+                </row>
+            '''
+        root = et.fromstring(xml)
+        d =  createRowFromXml(root)
+        self.assertTrue(d)
+        self.assertEqual(len(d.panels), 2)
+        self.assertEqual(len(d.panels[0].panelElements), 2)
+        self.assertEqual(len(d.panels[1].panelElements), 1)
 
-        def createPanel(self, type="foo", options=None, args=None):
-            xml = getPanelElementXml(type, options, args)
-            root = et.fromstring(xml)
-            return createPanelElementFromXml(root)
+    def testCreateRowWithComments(self):
+        xml = '''
+                <row>
+                    <!-- this better work -->
+                    <panel/>
+                </row>
+            '''
+        root = et.fromstring(xml)
+        row =  createRowFromXml(root)
+        xml = '''
+                <row>
+                    <!-- this better work -->
+                    <chart/>
+                </row>
+            '''
+        root = et.fromstring(xml)
+        row =  createRowFromXml(root)
 
-        def testCreateUnknownPanel(self):
-            with self.assertRaises(NotImplementedError):
-                d = self.createPanel('foo')
-
-        def testCreateAllowedPanels(self):
-            for panelType in ['single', 'chart', 'table',
-                              'html', 'map', 'event', 'list', 'viz']:
-                d = self.createPanel(panelType)
-                self.assertTrue(d.matchTagName == panelType)
-
-        def testCreateHTMLPanel(self):
-            d = self.createPanel(
-                'html', args='src="/foo/bar"')
-            self.assertTrue(d.options.get('serverSideInclude') == '/foo/bar')
-            self.assertFalse(d.options.get('rawcontent'))
-            d = self.createPanel(
-                'html', options='<div>Test</div>', args='src="/foo/bar"')
-            self.assertTrue(d.options.get('serverSideInclude') == '/foo/bar')
-            self.assertFalse(d.options.get('rawcontent'))
-            d = self.createPanel(
-                'html', options='<div>Test</div>')
-            self.assertFalse(d.options.get('serverSideInclude'))
-            self.assertEqual(d.options.get('rawcontent'), '<div>Test</div>')
-
-        def testCreateTablePanel(self):
-            """tables only have special format fields"""
-            d = self.createPanel('table', options='''
-                <format>
-                    <option name="fff">
-                        <list>foo</list>
-                        <list>bop</list>
-                    </option>
-                    <option name="bippity">
-                        <option name="bippity">bop</option>
-                    </option>
-                </format>
-                <format field="foobar" type="num">
-                    <option name="fff">
-                        <list>foo</list>
-                        <list>bop</list>
-                    </option>
-                    <option>bar</option>
-                </format>
-                ''')
-            self.assertTrue(d.fieldFormats == { # pylint: disable=E1103
-                '*': [{'type': 'text',
-                       'options': {'bippity': {'bippity': 'bop'},
-                                   'fff': ['foo', 'bop']
-                       }
-                      }],
-                'foobar': [{'type': 'num',
-                            'options': {None: 'bar',
-                                        'fff': ['foo', 'bop']
-                            }
-                           }]
-            })
-            #  formats can't mix options and lists.
-            #  lists can contain options and options can contain list but
-            #     neither can contain both.
-            with self.assertRaises(ValueError):
-                d = self.createPanel(
-                    'table',
-                    options='''
-                        <format>
-                            <option name="fff">
-                                <list>foo</list>
-                                <list>bop</list>
-                                <option name="should">not work</option>
-                            </option>
-                            <option>bar</option>
-                        </format>
-                    ''')
-
-        def testCreateChartPanelWithSelection(self):
-            chart = self.createPanel('chart', options='''
-                <selection>
-                    <set token="foo">$start$</set>
-                    <unset token="bar" />
-                </selection>
-                ''')
-
-            self.assertIsNotNone(chart.selection)
-            self.assertEqual(2, len(chart.selection))
-            self.assertEqual("settoken", chart.selection[0].type)
-            self.assertEqual("unsettoken", chart.selection[1].type)
-
-        def testCreateCustomVizPanel(self):
-            customViz = self.createPanel('viz', args='type="testapp.testviz"')
-            self.assertTrue(customViz.type == 'testapp.testviz')
-
-
-        def testCreateDefaultPanel(self):
-            """All panels have some things in common"""
-            #s test common nodes
-            d = self.createPanel('single', options='''
-                <title>Title1</title>
-                <searchString>search string</searchString>
-                <earliestTime>0</earliestTime>
-                <latestTime>50</latestTime>
-                <fields>foo bar baz</fields>
-                ''')
-            self.assertEqual(d.search.earliestTime, '0')
-            self.assertEqual(d.search.latestTime, '50')
-            self.assertEqual(d.title, 'Title1')
-            self.assertEqual(d.searchFieldList, 'foo bar baz'.split())
-
-            # should be able to accept one of the search modes
-            d = self.createPanel('single', options='''
-                <searchString>search string</searchString>
-                ''')
-            self.assertTrue(hasattr(d, 'search'),  'panel elements should have a search object')
-            self.assertEqual(getattr(d.search, 'searchMode'), 'template')
-            self.assertEqual(getattr(d.search, 'searchCommand'), 'search string')
-            d = self.createPanel('single', options='''
-                <searchName>search saved</searchName>
-                <searchTemplate>search template</searchTemplate>
-                <searchPostProcess>search postsearch</searchPostProcess>
-                ''')
-            self.assertEqual(getattr(d.search, 'searchMode'), 'saved')
-            self.assertEqual(getattr(d.search, 'searchCommand'), 'search saved')
-            d = self.createPanel('single', options='''
-                <searchTemplate>search template</searchTemplate>
-                ''')
-            self.assertEqual(getattr(d.search, 'searchMode'), 'template')
-            self.assertEqual(getattr(d.search, 'searchCommand'), 'search template')
-            d = self.createPanel('single', options='''
-                <searchPostProcess>search postsearch</searchPostProcess>
-                ''')
-            self.assertEqual(getattr(d.search, 'searchMode'), 'postsearch')
-            self.assertEqual(getattr(d.search, 'searchCommand'), 'search postsearch')
-            self.assertEqual(getattr(d.search, 'baseSearchId'), 'global')
-
-            # Options should not override internal settings
-            d = self.createPanel('chart', options='''
-                <option name="id">xyz</option>
-                <option name="managerid">abc</option>
-                <option name="el">abc</option>
-                <option name="tokenDependencies">abc</option>
-                <option name="resizable">False</option>
-                ''')
-
-            for option in d.options:
-                if option in ['id', 'el', 'managerid', 'tokenDependencies', 'resizable']:
-                    self.assertTrue(False, 'Options should not override internal settings')
-
-        def testCreateSavedSearch(self):
-            """All panels have some things in common"""
-            #s test common nodes
-            d = self.createPanel('single', options='''
-                <title>Title1</title>
-                <search ref="search"/>
-                ''')
-            self.assertEqual(d.search.searchCommand, 'search')
-
-
-        def testTokenDependencies(self):
-            for panelType in ('table', 'chart', 'single', 'map', 'list', 'html'):
-                panel = createPanelElementFromXml(et.fromstring('''
-                    <%(type)s depends="$foo$">
-                    </%(type)s>
-                ''' % dict(type=panelType)))
-                self.assertIsNotNone(panel)
-                self.assertIsNotNone(panel.tokenDeps)
-                self.assertEquals(panel.tokenDeps.depends, '$foo$')
-                self.assertEquals(panel.tokenDeps.rejects, '')
-
-                panel = createPanelElementFromXml(et.fromstring('''
-                    <%(type)s rejects="$foo$">
-                    </%(type)s>
-                ''' % dict(type=panelType)))
-                self.assertIsNotNone(panel)
-                self.assertIsNotNone(panel.tokenDeps)
-                self.assertEquals(panel.tokenDeps.rejects, '$foo$')
-                self.assertEquals(panel.tokenDeps.depends, '')
-
-                panel = createPanelElementFromXml(et.fromstring('''
-                    <%(type)s id="foo" depends="$foo$" rejects="$bar$">
-                    </%(type)s>
-                ''' % dict(type=panelType)))
-                self.assertIsNotNone(panel)
-                self.assertIsNotNone(panel.tokenDeps)
-                self.assertEquals(panel.tokenDeps.depends, '$foo$')
-                self.assertEquals(panel.tokenDeps.rejects, '$bar$')
-
-                panel = createPanelElementFromXml(et.fromstring('''
-                    <%(type)s>
-                    </%(type)s>
-                ''' % dict(type=panelType)))
-                self.assertIsNotNone(panel)
-                self.assertIsNone(panel.tokenDeps)
-
-                panel = createPanelElementFromXml(et.fromstring('''
-                    <%(type)s depends="" rejects="">
-                    </%(type)s>
-                ''' % dict(type=panelType)))
-                self.assertIsNotNone(panel)
-                self.assertIsNone(panel.tokenDeps)
-
-                dashboard = createDashboardFromXml(et.fromstring('''
-                    <form>
-                    
-                        <fieldset>
-                            <input token="foobar" rejects="$foobar$" />
-                        </fieldset>
-                    
-                        <row depends="$foobar$">
-                            <panel rejects="$foobar$">
-                                <chart depends="$x$" rejects="$y$">
-                                
-                                </chart>
-                            </panel>
-                        </row>
-                    </form>
-                '''))
-
-                self.assertIsNotNone(dashboard.rows[0].tokenDeps)
-                self.assertEquals(dashboard.rows[0].tokenDeps.depends, "$foobar$")
-                self.assertEquals(dashboard.rows[0].tokenDeps.rejects, "")
-                self.assertIsNotNone(dashboard.rows[0].panels[0].tokenDeps)
-                self.assertEquals(dashboard.rows[0].panels[0].tokenDeps.depends, "")
-                self.assertEquals(dashboard.rows[0].panels[0].tokenDeps.rejects, "$foobar$")
-                self.assertIsNotNone(dashboard.rows[0].panels[0].tokenDeps)
-                self.assertEquals(dashboard.rows[0].panels[0].tokenDeps.depends, "")
-                self.assertEquals(dashboard.rows[0].panels[0].tokenDeps.rejects, "$foobar$")
-                self.assertIsNotNone(dashboard.rows[0].panels[0].panelElements[0].tokenDeps)
-                self.assertEquals(dashboard.rows[0].panels[0].panelElements[0].tokenDeps.depends, "$x$")
-                self.assertEquals(dashboard.rows[0].panels[0].panelElements[0].tokenDeps.rejects, "$y$")
-                self.assertIsNotNone(dashboard.fieldset[0].tokenDeps)
-                self.assertEquals(dashboard.fieldset[0].tokenDeps.depends, "")
-                self.assertEquals(dashboard.fieldset[0].tokenDeps.rejects, "$foobar$")
-                dashboard = createDashboardFromXml(et.fromstring('''
-                    <form>
-
-                        <fieldset>
-                            <input token="multiselect" type="multiselect" rejects="$foobar$">
-                                <search ref="foo"/>
-                            </input>
-                        </fieldset>
-
-                        <row depends="$foobar$">
-                            <panel rejects="$foobar$">
-                                <chart depends="$x$" rejects="$y$">
-
-                                </chart>
-                            </panel>
-                        </row>
-                    </form>
-                '''))
-                self.assertEquals(dashboard.fieldset[0].search.searchCommand, "foo")
-
-
-        def testSimpleDrilldownPopulated(self):
-            for panelType in ('table', 'chart', 'single', 'map', 'list'):
-                xmlNode = et.fromstring('''
-                    <%(type)s id="panel1">
-                        <title>Panel 1</title>
-                        <drilldown>
-                            <set token="foobar">($click.value$)</set>
-                        </drilldown>
-                    </%(type)s>
-                ''' % dict(type=panelType))
-                panel = createPanelElementFromXml(xmlNode)
-                self.assertIsNotNone(panel)
-                self.assertEquals(len(panel.simpleDrilldown), 1)
-
-    class _findPrimarySearchNodeTests(unittest.TestCase):
-        def testAnnotationBeforePrimary(self):
-            chart = et.fromstring('''
-              <chart>
-                <title>test_chart_annotation_pdf_printing</title>
-                <search type="annotation">
-                  <query>index=_internal (log_level="WARN" OR log_level="ERROR" OR log_level="INFO") | eval annotation_label = "Category is" | eval annotation_category = log_level | table _time annotation_label annotation_category</query>
-                  <earliest>-1m@m</earliest>
-                  <latest>now</latest>
-                </search>
-                <search>
-                  <query>index=_internal | timechart count</query>
-                  <earliest>-1m@m</earliest>
-                  <latest>now</latest>
-                </search>
-                <option name="charting.annotation.categoryColors">{"ERROR":"0xFF0000","WARN":"0x0000FF", "INFO": "0x008000"}</option>
-                <option name="charting.chart">area</option>
-              </chart>
-            ''')
-            primary = _findPrimarySearchNode(chart)
-            self.assertIsNone(primary.get('type'), 'primary search type')
-            self.assertEqual(primary.findtext('query'), 'index=_internal | timechart count', 'primary search type')
-
-        def test_isPrimarySearchNode(self):
-            primaryNode = et.fromstring('''
-                <search type="primary">
-                  <query>index=_internal | timechart count</query>
-                  <earliest>-1m@m</earliest>
-                  <latest>now</latest>
-                </search>
-            ''')
-            self.assertTrue(_isPrimarySearchNode(primaryNode))
-
-            defaultNode = et.fromstring('''
-                <search>
-                  <query>index=_internal | timechart count</query>
-                  <earliest>-1m@m</earliest>
-                  <latest>now</latest>
-                </search>
-            ''')
-            self.assertTrue(_isPrimarySearchNode(defaultNode))
-
-            annotationNode = et.fromstring('''
-                <search type="annotation">
-                  <query>index=_internal (log_level="WARN" OR log_level="ERROR" OR log_level="INFO") | eval annotation_label = "Category is" | eval annotation_category = log_level | table _time annotation_label annotation_category</query>
-                  <earliest>-1m@m</earliest>
-                  <latest>now</latest>
-                </search>
-            ''')
-            self.assertFalse(_isPrimarySearchNode(annotationNode))
-
-    class CreatePanelTests(unittest.TestCase):
-        def getPanel(self, xml='<panel></panel>'):
-            root = et.fromstring(xml)
-            return createPanelFromXML(root)
-
-        def testEmptyPanel(self):
-            self.assertTrue(isinstance(self.getPanel(), Panel), '')
-
-        def testPanelId(self):
-            panel = self.getPanel(xml='<panel id="foo"></panel>')
-            self.assertTrue(isinstance(panel, Panel), 'Panel should exist')
-            self.assertEqual(panel.id, "foo", 'Panel should have id=foo')
-
-        def testPanelMultipleSearches(self):
-            """Extract new search format and multiple searches"""
-            #s test common nodes
-            d = self.getPanel(xml='''
-            <panel>
-                <search id="panel_search">
-                    <query>search string also</query>
-                    <earliest>-15m</earliest>
-                    <latest>now</latest>
-                </search>
-                <search base="panel_search">
-                    <query>search postsearch</query>
-                </search>
-            </panel>
-            ''')
-            self.assertEqual(len(d.searches), 2)
-            self.assertEqual(getattr(d.searches[0], 'searchMode'), 'template')
-            self.assertEqual(getattr(d.searches[0], 'searchCommand'), 'search string also')
-            self.assertEqual(getattr(d.searches[0], 'id'), 'panel_search')
-            self.assertEqual(getattr(d.searches[0], 'latestTime'), 'now')
-            self.assertEqual(getattr(d.searches[0], 'earliestTime'), '-15m')
-            self.assertEqual(getattr(d.searches[1], 'searchMode'), 'postsearch')
-            self.assertEqual(getattr(d.searches[1], 'searchCommand'), 'search postsearch')
-            self.assertEqual(getattr(d.searches[1], 'baseSearchId'), 'panel_search')
-
-        def testPanelSavedSearch(self):
-            """Extract new search format saved search"""
-            d = self.getPanel(xml='''
-            <panel>
-                <search ref="panel_search"/>
-            </panel>
-            ''')
-            self.assertEqual(len(d.searches), 1)
-            self.assertEqual(getattr(d.searches[0], 'searchMode'), 'saved')
-            self.assertEqual(getattr(d.searches[0], 'searchCommand'), 'panel_search')
-
-    class CreateRowTests(unittest.TestCase):
-        def getRowLxml(self, args='', panels=1):
-            xml = getRowXml(args, panels)
-            root = et.fromstring(xml)
-            return createRowFromXml(root)
-
-        def testCreateRow(self):
-            d = self.getRowLxml()
-            self.assertTrue(d)
-            self.assertEqual(len(d.panels), 1)
-            self.assertEqual(
-                d.panels[0].panelElements[0].matchTagName, 'single')
-
-        def testRowGrouping(self):
-            d = self.getRowLxml(args='grouping="2,1"', panels=3)
-            self.assertTrue(d)
-            self.assertEqual(len(d.panels), 2)
-            self.assertEqual(len(d.panels[0].panelElements), 2)
-            self.assertEqual(len(d.panels[1].panelElements), 1)
-
-        def testRowId(self):
-            d = self.getRowLxml(args='id="foo"')
-            self.assertTrue(d)
-            self.assertEqual(d.id, "foo", "Row Id should be foo")
-
-        def testCreateRowWith3Panels(self):
-            d = self.getRowLxml(args='', panels=3)
-            self.assertTrue(d)
-            self.assertEqual(len(d.panels), 3)
-
-        def testCreateRowWithPanels(self):
+    def testCreateRowWithTitleException(self):
+        with self.assertRaises(Exception):
             xml = '''
                     <row>
-                        <panel>
-                            <single/>
-                        </panel>
-                    </row>
-                '''
-            root = et.fromstring(xml)
-            d =  createRowFromXml(root)
-            self.assertTrue(d)
-            self.assertEqual(len(d.panels), 1)
-            self.assertEqual(
-                d.panels[0].panelElements[0].matchTagName, 'single')
-
-        def testRowGroupingWithPanels(self):
-            xml = '''
-                    <row>
-                        <panel>
-                            <single/>
-                            <single/>
-                        </panel>
-                        <panel>
-                            <single/>
-                        </panel>
-                    </row>
-                '''
-            root = et.fromstring(xml)
-            d =  createRowFromXml(root)
-            self.assertTrue(d)
-            self.assertEqual(len(d.panels), 2)
-            self.assertEqual(len(d.panels[0].panelElements), 2)
-            self.assertEqual(len(d.panels[1].panelElements), 1)
-
-        def testCreateRowWithComments(self):
-            xml = '''
-                    <row>
-                        <!-- this better work -->
+                        <title/>
                         <panel/>
                     </row>
                 '''
             root = et.fromstring(xml)
             row =  createRowFromXml(root)
+        with self.assertRaises(Exception):
             xml = '''
                     <row>
-                        <!-- this better work -->
+                        <title/>
                         <chart/>
                     </row>
                 '''
             root = et.fromstring(xml)
             row =  createRowFromXml(root)
 
-        def testCreateRowWithTitleException(self):
-            with self.assertRaises(Exception):
-                xml = '''
-                        <row>
-                            <title/>
-                            <panel/>
-                        </row>
-                    '''
-                root = et.fromstring(xml)
-                row =  createRowFromXml(root)
-            with self.assertRaises(Exception):
-                xml = '''
-                        <row>
-                            <title/>
-                            <chart/>
-                        </row>
-                    '''
-                root = et.fromstring(xml)
-                row =  createRowFromXml(root)
 
+class CreateDashboardTests(unittest.TestCase):
+    def getSimpleLxml(self, root='dashboard', rows=1, fieldset=''):
+        nodes = []
+        nodes.append('<%(root)s>')
+        nodes.append(fieldset)
+        for i in range(0, rows):
+            nodes.append(getRowXml())
+        nodes.append('</%(root)s>')
+        xml = ''.join(nodes)
+        xml = xml % {'root': root}
+        root = et.fromstring(xml)
+        return createDashboardFromXml(root)
 
-    class CreateDashboardTests(unittest.TestCase):
-        def getSimpleLxml(self, root='dashboard', rows=1, fieldset=''):
-            nodes = []
-            nodes.append('<%(root)s>')
-            nodes.append(fieldset)
-            for i in range(0, rows):
-                nodes.append(getRowXml())
-            nodes.append('</%(root)s>')
-            xml = ''.join(nodes)
-            xml = xml % {'root': root}
-            root = et.fromstring(xml)
-            return createDashboardFromXml(root)
+    def testCreateDashboard(self):
+        d = self.getSimpleLxml()
+        self.assertTrue(d)
+        self.assertEqual(d.matchTagName, 'dashboard')
 
-        def testCreateDashboard(self):
-            d = self.getSimpleLxml()
-            self.assertTrue(d)
-            self.assertEqual(d.matchTagName, 'dashboard')
+    def testCreateForm(self):
+        d = self.getSimpleLxml(root='form')
+        self.assertTrue(d)
+        self.assertEqual(d.matchTagName, 'form')
 
-        def testCreateForm(self):
-            d = self.getSimpleLxml(root='form')
-            self.assertTrue(d)
-            self.assertEqual(d.matchTagName, 'form')
+    def testCreateFormWithFieldset(self):
+        fieldset = '''
+        <fieldset>
+            <input token="foo" searchWhenChanged="True"></input>
+            <html></html>
+            <shouldntShow></shouldntShow>
+        </fieldset>
+        '''
+        d = self.getSimpleLxml(root='form', fieldset=fieldset)
+        self.assertTrue(d)
+        self.assertTrue(d.fieldset)
+        self.assertEqual(len(d.fieldset), 2)
+        self.assertEqual(d.fieldset[0].__class__.__name__, 'TextInput')
+        self.assertEqual(d.fieldset[0].searchWhenChanged, True)
+        self.assertEqual(d.fieldset[1].matchTagName, 'html')
+        self.assertEqual(d.matchTagName, 'form')
 
-        def testCreateFormWithFieldset(self):
-            fieldset = '''
-            <fieldset>
-                <input token="foo" searchWhenChanged="True"></input>
-                <html></html>
-                <shouldntShow></shouldntShow>
-            </fieldset>
-            '''
-            d = self.getSimpleLxml(root='form', fieldset=fieldset)
-            self.assertTrue(d)
-            self.assertTrue(d.fieldset)
-            self.assertEqual(len(d.fieldset), 2)
-            self.assertEqual(d.fieldset[0].__class__.__name__, 'TextInput')
-            self.assertEqual(d.fieldset[0].searchWhenChanged, True)
-            self.assertEqual(d.fieldset[1].matchTagName, 'html')
-            self.assertEqual(d.matchTagName, 'form')
+    def testCreateUnsupportedRoot(self):
+        with self.assertRaises(Exception):
+            self.getSimpleLxml(root='notFormOrDashboard')
 
-        def testCreateUnsupportedRoot(self):
-            with self.assertRaises(Exception):
-                self.getSimpleLxml(root='notFormOrDashboard')
+    def testValidationMessages(self):
+        msgs = getValidationMessages(et.fromstring('<dashboard></dashboard>'))
+        self.assertIsNotNone(msgs)
+        self.assertEqual(len(msgs), 0)
 
-        def testValidationMessages(self):
-            msgs = getValidationMessages(et.fromstring('<dashboard></dashboard>'))
-            self.assertIsNotNone(msgs)
-            self.assertEquals(len(msgs), 0)
+        msgs = getValidationMessages(et.fromstring('''
+            <dashboard>
+                <row>
+                    <table>
+                        <drilldown>
+                            <set token="foo">...</set>
+                            <condition field="bar"></condition>
+                        </drilldown>
+                    </table>
+                </row>
+            </dashboard>
+        '''))
+        self.assertIsNotNone(msgs)
+        self.assertGreater(len(msgs), 0)
 
-            msgs = getValidationMessages(et.fromstring('''
-                <dashboard>
-                    <row>
-                        <table>
-                            <drilldown>
-                                <set token="foo">...</set>
-                                <condition field="bar"></condition>
-                            </drilldown>
-                        </table>
-                    </row>
-                </dashboard>
-            '''))
-            self.assertIsNotNone(msgs)
-            self.assertGreater(len(msgs), 0)
+        msgs = getValidationMessages(et.fromstring('''
+            <dashboard>
+                <row>
+                    <table>
+                        <drilldown>
+                            <set field="bar" token="foo">...</set>
+                        </drilldown>
+                    </table>
+                </row>
+            </dashboard>
+        '''))
+        self.assertIsNotNone(msgs)
+        self.assertGreater(len(msgs), 0)
 
-            msgs = getValidationMessages(et.fromstring('''
-                <dashboard>
-                    <row>
-                        <table>
-                            <drilldown>
-                                <set field="bar" token="foo">...</set>
-                            </drilldown>
-                        </table>
-                    </row>
-                </dashboard>
-            '''))
-            self.assertIsNotNone(msgs)
-            self.assertGreater(len(msgs), 0)
+        msgs = getValidationMessages(et.fromstring('''
+            <dashboard>
+                <row>
+                    <table>
+                        <drilldown>
+                            <link field="bar">...</link>
+                            <link field="bar">...</link>
+                        </drilldown>
+                    </table>
+                </row>
+            </dashboard>
+        '''))
+        self.assertIsNotNone(msgs)
+        self.assertGreater(len(msgs), 0)
 
-            msgs = getValidationMessages(et.fromstring('''
-                <dashboard>
-                    <row>
-                        <table>
-                            <drilldown>
-                                <link field="bar">...</link>
-                                <link field="bar">...</link>
-                            </drilldown>
-                        </table>
-                    </row>
-                </dashboard>
-            '''))
-            self.assertIsNotNone(msgs)
-            self.assertGreater(len(msgs), 0)
+        msgs = getValidationMessages(et.fromstring('''
+            <dashboard>
+                <row>
+                </row>
+            </dashboard>
+        '''))
+        self.assertIsNotNone(msgs)
+        self.assertGreater(len(msgs), 0)
 
-            msgs = getValidationMessages(et.fromstring('''
-                <dashboard>
-                    <row>
-                    </row>
-                </dashboard>
-            '''))
-            self.assertIsNotNone(msgs)
-            self.assertGreater(len(msgs), 0)
+        msgs = getValidationMessages(et.fromstring('<foobar></foobar>'))
+        self.assertIsNotNone(msgs)
+        self.assertGreater(len(msgs), 0)
 
-            msgs = getValidationMessages(et.fromstring('<foobar></foobar>'))
-            self.assertIsNotNone(msgs)
-            self.assertGreater(len(msgs), 0)
+class ExtractHTMLTests(unittest.TestCase):
+    def testExtractEncodedHTML(self):
+        self.assertEqual(" foo ", extractHtmlContent(et.fromstring('<html encoded="1"><![CDATA[ foo ]]></html>')))
 
-    class ExtractHTMLTests(unittest.TestCase):
-        def testExtractEncodedHTML(self):
-            self.assertEqual(" foo ", extractHtmlContent(et.fromstring('<html encoded="1"><![CDATA[ foo ]]></html>')))
+    def testExtractEmptyHTML(self):
+        self.assertEqual('', extractHtmlContent(et.fromstring('<html></html>')))
+        self.assertEqual('', extractHtmlContent(et.fromstring('<html/>')))
+        self.assertEqual('', extractHtmlContent(et.fromstring('<html id="foobar" />')))
 
-        def testExtractEmptyHTML(self):
-            self.assertEqual('', extractHtmlContent(et.fromstring('<html></html>')))
-            self.assertEqual('', extractHtmlContent(et.fromstring('<html/>')))
-            self.assertEqual('', extractHtmlContent(et.fromstring('<html id="foobar" />')))
+    def testExtractInlineHTML(self):
+        self.assertEqual('<h1>test</h1><p>foo</p>', extractHtmlContent(et.fromstring('<html id="foobar"><h1>test</h1><p>foo</p></html>')))
 
-        def testExtractInlineHTML(self):
-            self.assertEqual('<h1>test</h1><p>foo</p>', extractHtmlContent(et.fromstring('<html id="foobar"><h1>test</h1><p>foo</p></html>')))
-
+if __name__ == "__main__":
     loader = unittest.TestLoader()
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([
         loader.loadTestsFromTestCase(CreatePanelElementTests),
@@ -1174,3 +1173,4 @@ if __name__ == '__main__':
         loader.loadTestsFromTestCase(CreatePanelTests),
         loader.loadTestsFromTestCase(ExtractHTMLTests)
     ]))
+

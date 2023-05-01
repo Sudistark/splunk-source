@@ -3,7 +3,7 @@ from __future__ import print_function
 from __future__ import absolute_import
 from builtins import range
 from builtins import map
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 
 from splunk.models import ViewConfigurationException
 import splunk.models.legacy_views.base as base

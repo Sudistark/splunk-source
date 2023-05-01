@@ -133,104 +133,103 @@ def migFieldActions_4_1(infile, outfile, isDryRun=False):
     migrateFieldActions(infile, outfile)
     comm.removeItem(infile, isDryRun)
 
+
+#
+# Unittests
+#
+import unittest
+
+TEST_FA_CONF = '''    
+# This example searches an IP on Google:
+[googleExample]
+metaKeys=ip
+uri=http://google.com/search?q={$ip}
+label=Google this ip
+method=GET
+
+# This example runs a custom search in SplunkWeb:
+[some_custom_search]
+metaKeys = ruser,rhost
+term=authentication failure | filter ruser={$ruser} rhost={$rhost}
+label=Search for other breakin attempts by this user
+alwaysReplace=true
+
+# This example looks up your event on SplunkBase
+[SplunkBaseLookup]
+metaKeys=_raw, host
+uri=http://apps.splunk.com/
+label=Search SplunkBase
+target=splunkbase
+method=POST
+payload= event={$_raw}&myhost={$host}
+'''
+
+class FieldActionMigrationTest(unittest.TestCase):
+    
+    def getConf(self):
+        lines = TEST_FA_CONF.split('\n')
+        return comm.readConfLines(lines)
+        
+        
+    def testLinkGetGeneration(self):
+        conf = self.getConf()
+
+        self.assertTrue('googleExample' in conf, "The googleExample field action should be in the conf.")
+        
+        output = migrateFieldActionStanza(conf['googleExample'])
+        
+        expect = {
+            'type': 'link',
+            'fields': 'ip',
+            'link.uri': 'http://google.com/search?q=$ip$',
+            'label': 'Google this ip'
+        }
+        self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
+        
+        
+    def testLinkPostGeneration(self):
+        conf = self.getConf()
+        self.assertTrue('SplunkBaseLookup' in conf, "The SplunkBaseLookup field action should be in the conf.")
+        
+        output = migrateFieldActionStanza(conf['SplunkBaseLookup'])
+        
+        expect = {
+            'type': 'link',
+            'fields': '_raw, host',
+            'link.uri': 'http://apps.splunk.com/',
+            'link.method': 'post',
+            'label': 'Search SplunkBase',
+            'target': 'splunkbase',
+            'link.postargs.1.key': 'event',
+            'link.postargs.1.value': '$_raw$',
+            'link.postargs.2.key': 'myhost',
+            'link.postargs.2.value': '$host$'
+        }
+        self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
+        
+        
+    def testSearchTypeGeneration(self):
+        conf = self.getConf()
+        self.assertTrue('some_custom_search' in conf, "The some_custom_search field action should be in the conf.")
+        
+        output = migrateFieldActionStanza(conf['some_custom_search'])
+        
+        expect = {
+            'type': 'search',
+            'fields': 'ruser,rhost',
+            'search.search_string': 'authentication failure | filter ruser=$ruser$ rhost=$rhost$',
+            'label': 'Search for other breakin attempts by this user'
+        }
+        self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
+
+
 if __name__ == '__main__':
-
-
-    def run_tests():
-        import unittest
-        
-        TEST_FA_CONF = '''    
-        # This example searches an IP on Google:
-        [googleExample]
-        metaKeys=ip
-        uri=http://google.com/search?q={$ip}
-        label=Google this ip
-        method=GET
-
-        # This example runs a custom search in SplunkWeb:
-        [some_custom_search]
-        metaKeys = ruser,rhost
-        term=authentication failure | filter ruser={$ruser} rhost={$rhost}
-        label=Search for other breakin attempts by this user
-        alwaysReplace=true
-
-        # This example looks up your event on SplunkBase
-        [SplunkBaseLookup]
-        metaKeys=_raw, host
-        uri=http://apps.splunk.com/
-        label=Search SplunkBase
-        target=splunkbase
-        method=POST
-        payload= event={$_raw}&myhost={$host}
-        '''
-        
-        class FieldActionMigrationTest(unittest.TestCase):
-            
-            def getConf(self):
-                lines = TEST_FA_CONF.split('\n')
-                return comm.readConfLines(lines)
-                
-                
-            def testLinkGetGeneration(self):
-                conf = self.getConf()
-
-                self.assert_('googleExample' in conf, "The googleExample field action should be in the conf.")
-                
-                output = migrateFieldActionStanza(conf['googleExample'])
-                
-                expect = {
-                    'type': 'link',
-                    'fields': 'ip',
-                    'link.uri': 'http://google.com/search?q=$ip$',
-                    'label': 'Google this ip'
-                }
-                self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
-                
-                
-            def testLinkPostGeneration(self):
-                conf = self.getConf()
-                self.assert_('SplunkBaseLookup' in conf, "The SplunkBaseLookup field action should be in the conf.")
-                
-                output = migrateFieldActionStanza(conf['SplunkBaseLookup'])
-                
-                expect = {
-                    'type': 'link',
-                    'fields': '_raw, host',
-                    'link.uri': 'http://apps.splunk.com/',
-                    'link.method': 'post',
-                    'label': 'Search SplunkBase',
-                    'target': 'splunkbase',
-                    'link.postargs.1.key': 'event',
-                    'link.postargs.1.value': '$_raw$',
-                    'link.postargs.2.key': 'myhost',
-                    'link.postargs.2.value': '$host$'
-                }
-                self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
-                
-                
-            def testSearchTypeGeneration(self):
-                conf = self.getConf()
-                self.assert_('some_custom_search' in conf, "The some_custom_search field action should be in the conf.")
-                
-                output = migrateFieldActionStanza(conf['some_custom_search'])
-                
-                expect = {
-                    'type': 'search',
-                    'fields': 'ruser,rhost',
-                    'search.search_string': 'authentication failure | filter ruser=$ruser$ rhost=$rhost$',
-                    'label': 'Search for other breakin attempts by this user'
-                }
-                self.assertEqual(output, expect, 'The field actions should be transformed as expected.')
-
-        # run tests
-        suite = unittest.TestLoader().loadTestsFromTestCase(FieldActionMigrationTest)
-        unittest.TextTestRunner(verbosity=2).run(suite)
-
-
     import sys
 
     if '-t' in sys.argv or '--test' in sys.argv or len(sys.argv) == 1:
-        run_tests()
+        # run tests
+        suite = unittest.TestLoader().loadTestsFromTestCase(FieldActionMigrationTest)
+        unittest.TextTestRunner(verbosity=2).run(suite)
 
     elif len(sys.argv) >= 3:
         logger.addHandler(logging.StreamHandler())

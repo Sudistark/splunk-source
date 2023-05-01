@@ -18,7 +18,7 @@ from splunk.clilib.bundle_paths import make_splunkhome_path
 
 
 APPS_PATH = bundle_paths.get_base_path()
-PACKAGE_PATH = os.path.join(bundle_paths.get_system_bundle_path(), 'static', 'app-packages')
+PACKAGE_PATH = make_splunkhome_path(['share', 'splunk', 'app_packages'])
 TEMPLATES_PATH = make_splunkhome_path(['share', 'splunk', 'app_templates'])
 
 TEXT_EXTENSIONS = ['txt', 'html', 'htm', 'xhtml', 'css', 'py', 'pl', 'ps1', 'bat', 'sh', 'conf', 'js', 'xml', 'xsl', 'conf', 'meta']
@@ -258,5 +258,5 @@ def packageApp(appName, needsMerging=True):
         bundle_paths.safe_remove(splTarPath)
     os.rename(tarPath, splTarPath)
     
-    url = '%s/static/app-packages/%s' % (_getSplunkdUri(), os.path.basename(splTarPath))
+    url = "direct download URL is deprecated"
     return (url, splTarPath)    

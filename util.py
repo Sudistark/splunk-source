@@ -20,7 +20,22 @@ try:  # Python 3
 except ImportError:  # Python 2
     from UserDict import UserDict
 
-
+# Normally,
+#
+#     import html
+#
+# would be fine, but because "html" is a generic module name new to
+# Python 3, and because apps can mangle sys.path/site/PYTHONPATH, we may
+# import an "html" module that isn't one from Python, but one from an app
+# instead. By using importlib, we guarantee we're importing Python's
+# "html".
+if sys.version_info >= (3, 0):
+    from importlib.util import find_spec, module_from_spec
+    html_spec = find_spec("html", os.path.join(os.path.dirname(sys.executable), "lib"))
+    html = module_from_spec(html_spec)
+    html_spec.loader.exec_module(html)
+else: 
+    import HTMLParser
 
 FIELD_DELIMITER = ","
 FIELD_ESCAPE    = "\\"
@@ -867,8 +882,15 @@ def isRedirectSafe(url):
     if not url:
         return False
 
+    urlDecode = parse.unquote(str(url))
+    if sys.version_info >= (3, 0):
+        htmlDecode = html.unescape(urlDecode)
+    else: 
+        htmlParser = HTMLParser.HTMLParser()
+        htmlDecode = htmlParser.unescape(urlDecode)
+
     # Catch things like https:// http:// file://
-    o = parse.urlparse(str(url))
+    o = parse.urlparse(htmlDecode.strip())
     if o.scheme:
         return False
 
@@ -926,12 +948,9 @@ def parseByteSizeString(input_string, base=2):
 
     USAGE
 
-        >>> parseByteSizeString('16MB')
-        {
-            'byte_value': 16777216,
-            'relative_value': 16,
-            'units': 'MB'
-        }
+        >>> parseByteSizeString('16MB') == {'byte_value': 16777216.0, 'relative_value': 16.0, 'units': 'MB'}
+        True
+
     '''
     _compile_regexes() 
     match = BYTE_PARSE_REX.search(input_string)
@@ -1090,710 +1109,758 @@ def interpolateString(template, dictionary):
 
     return result   
 
-if __name__ == '__main__':
-    
-    import unittest
 
-    class MainTest(unittest.TestCase):
-        def test_interpolateString(self):
-            self.assertEqual(interpolateString("$test$", {"test": "Hello World"}), "Hello World")
-            self.assertEqual(interpolateString("$test1$ $test2$", {"test1": "Hello", "test2": "World"}), "Hello World")
-            self.assertEqual(interpolateString("Hello $test$ World", {"test": "foobar", "test2": "blah"}), "Hello foobar World")
-            self.assertEqual(interpolateString("Look$test$no$test2$", {"test": "ma", "test2": "spaces"}), "Lookmanospaces")
-            self.assertEqual(interpolateString("$negativeTest$", {"test": "test"}), "$negativeTest$")    
- 
-        def test_parseByteSizeString(self):
+def pytest_mark_skip_conditional(reason=None, allow_module_level=False):
+    """ We want to run from splunk.util import pytest_mark_skip_conditional and run mark.skip but only in dev builds. reason can
+        be any description as to why the test is skipped
 
-            # spot check various units
-            self.assertEqual(parseByteSizeString(
-                '1B'), 
-                {
-                    'byte_value': 1,
-                    'relative_value': 1,
-                    'units': 'B'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '1MB'), 
-                {
-                    'byte_value': 1048576,
-                    'relative_value': 1,
-                    'units': 'MB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '1TB'), 
-                {
-                    'byte_value': 1099511627776,
-                    'relative_value': 1,
-                    'units': 'TB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '1YB'), 
-                {
-                    'byte_value': 1.2089258196146292e+24,
-                    'relative_value': 1,
-                    'units': 'YB'
-                }
-            )
-
-            # check different numbers
-            self.assertEqual(parseByteSizeString(
-                '123456'), 
-                {
-                    'byte_value': 123456,
-                    'relative_value': 123456,
-                    'units': 'B'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '123456.789'), 
-                {
-                    'byte_value': 123456.789,
-                    'relative_value': 123456.789,
-                    'units': 'B'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '123.456GB'), 
-                {
-                    'byte_value': 132559870623.744,
-                    'relative_value': 123.456,
-                    'units': 'GB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '-123.456GB'), 
-                {
-                    'byte_value': -132559870623.744,
-                    'relative_value': -123.456,
-                    'units': 'GB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '0GB'), 
-                {
-                    'byte_value': 0,
-                    'relative_value': 0,
-                    'units': 'GB'
-                }
-            )
-
-            # check IEC prefix
-            self.assertEqual(parseByteSizeString(
-                '-16MiB'), 
-                {
-                    'byte_value': -16777216,
-                    'relative_value': -16,
-                    'units': 'MiB'
-                }
-            )
-
-            # check that base is ignored if IEC is detected
-            self.assertEqual(parseByteSizeString(
-                '16MiB', base=10), 
-                {
-                    'byte_value': 16777216,
-                    'relative_value': 16,
-                    'units': 'MiB'
-                }
-            )
-
-            # check base awareness
-            self.assertEqual(parseByteSizeString(
-                '-16MB', base=10), 
-                {
-                    'byte_value': -16000000,
-                    'relative_value': -16,
-                    'units': 'MB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '16MB', base=2), 
-                {
-                    'byte_value': 16777216,
-                    'relative_value': 16,
-                    'units': 'MB'
-                }
-            )
-            self.assertEqual(parseByteSizeString(
-                '0GB', base=10), 
-                {
-                    'byte_value': 0,
-                    'relative_value': 0,
-                    'units': 'GB'
-                }
-            )
+        If we fail to import it means that we are in a production build so we will just run
+        the given function
+    """
+    def pytest_mark_skip_decorator(func):
+        try:
+            import pytest
+            func = pytest.mark.skip(reason=reason, allow_module_level=allow_module_level)(func)
+            return func
+        except ImportError as error:
+            return func
+    return pytest_mark_skip_decorator
 
 
-        def testNormalizeBoolean(self):
-            
-            # test single string normalization
-            self.assertTrue(normalizeBoolean(1) == True)
-            self.assertTrue(normalizeBoolean('1') == True)
-            self.assertTrue(normalizeBoolean('true') == True)
-            self.assertTrue(normalizeBoolean('True') == True)
-            self.assertTrue(normalizeBoolean('yes') == True)
-            self.assertTrue(normalizeBoolean('y') == True)
-            
-            self.assertTrue(normalizeBoolean(0) == False)
-            self.assertTrue(normalizeBoolean('0') == False)
-            self.assertTrue(normalizeBoolean('false') == False)
-            self.assertTrue(normalizeBoolean('False') == False)
-            self.assertTrue(normalizeBoolean('no') == False)
-            self.assertTrue(normalizeBoolean('n') == False)
+def pytest_mark_skipif(*args, **kwargs):
+    """Equivalent of pytest.mark.skipif, but safe to use for release builds."""
+    def pytest_mark_skipif_decorator(func):
+        try:
+            import pytest
+            func = pytest.mark.skipif(*args, **kwargs)(func)
+            return func
+        except ImportError as error:
+            return func
+    return pytest_mark_skipif_decorator
 
-            self.assertTrue(normalizeBoolean('') == '')
-            self.assertTrue(normalizeBoolean('') != True)
-            self.assertTrue(normalizeBoolean('') != False)
-            self.assertTrue(normalizeBoolean(None) == None)
 
-            self.assertTrue(normalizeBoolean(1, includeIntegers=False) == 1)
-            self.assertTrue(normalizeBoolean('1', includeIntegers=False) == '1')
-            self.assertTrue(isinstance(normalizeBoolean('1', includeIntegers=False), str))
-            self.assertTrue(normalizeBoolean(0, includeIntegers=False) == 0)
-            self.assertTrue(normalizeBoolean('0', includeIntegers=False) == '0')
-            self.assertTrue(isinstance(normalizeBoolean('0', includeIntegers=False), str))
-            
-            self.assertTrue(normalizeBoolean('someother') == 'someother')
-            
-            self.assertRaises(ValueError, normalizeBoolean, 'someother', enableStrictMode=True)
+import unittest
 
-            # test dictionary normalization
-            testDictionary = {
-            "lcT"   : "true",
-            "ucT"   : "True",
-            "lcF"   : "false",
-            "ucF"   : "False",
-            "numT"  : "1",
-            "numF"  : "0",
-            "ynT"   : "yes",
-            "ynF"   : "no",
-            "ynmT"  : "yEs",
-            "ynmF"  : "nO",
-            "ynsT"  : "y",
-            "ynsF"  : "n",
-            "ynsuT" : "Y",
-            "ynsuF" : "N"
+class MainTest(unittest.TestCase):
+    def test_interpolateString(self):
+        self.assertEqual(interpolateString("$test$", {"test": "Hello World"}), "Hello World")
+        self.assertEqual(interpolateString("$test1$ $test2$", {"test1": "Hello", "test2": "World"}), "Hello World")
+        self.assertEqual(interpolateString("Hello $test$ World", {"test": "foobar", "test2": "blah"}), "Hello foobar World")
+        self.assertEqual(interpolateString("Look$test$no$test2$", {"test": "ma", "test2": "spaces"}), "Lookmanospaces")
+        self.assertEqual(interpolateString("$negativeTest$", {"test": "test"}), "$negativeTest$")    
+
+    def test_parseByteSizeString(self):
+
+        # spot check various units
+        self.assertEqual(parseByteSizeString(
+            '1B'), 
+            {
+                'byte_value': 1,
+                'relative_value': 1,
+                'units': 'B'
             }
-
-            testDictionary_results = {
-            "lcT"   : True,
-            "ucT"   : True,
-            "lcF"   : False,
-            "ucF"   : False,
-            "numT"  : True,
-            "numF"  : False,
-            "ynT"   : True,
-            "ynF"   : False,
-            "ynmT"  : True,
-            "ynmF"  : False,
-            "ynsT"  : True,
-            "ynsF"  : False,
-            "ynsuT" : True,
-            "ynsuF" : False
+        )
+        self.assertEqual(parseByteSizeString(
+            '1MB'), 
+            {
+                'byte_value': 1048576,
+                'relative_value': 1,
+                'units': 'MB'
             }
+        )
+        self.assertEqual(parseByteSizeString(
+            '1TB'), 
+            {
+                'byte_value': 1099511627776,
+                'relative_value': 1,
+                'units': 'TB'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '1YB'), 
+            {
+                'byte_value': 1.2089258196146292e+24,
+                'relative_value': 1,
+                'units': 'YB'
+            }
+        )
 
-            for k in testDictionary:
-                self.assertTrue( normalizeBoolean(testDictionary[k]) == testDictionary_results[k])
-                self.assertTrue( normalizeBoolean(testDictionary[k]) != (not testDictionary_results[k]))
+        # check different numbers
+        self.assertEqual(parseByteSizeString(
+            '123456'), 
+            {
+                'byte_value': 123456,
+                'relative_value': 123456,
+                'units': 'B'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '123456.789'), 
+            {
+                'byte_value': 123456.789,
+                'relative_value': 123456.789,
+                'units': 'B'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '123.456GB'), 
+            {
+                'byte_value': 132559870623.744,
+                'relative_value': 123.456,
+                'units': 'GB'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '-123.456GB'), 
+            {
+                'byte_value': -132559870623.744,
+                'relative_value': -123.456,
+                'units': 'GB'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '0GB'), 
+            {
+                'byte_value': 0,
+                'relative_value': 0,
+                'units': 'GB'
+            }
+        )
 
-            # test list normalization
-            testList = [True, False, "True", "False", "true", "false", "1", "0", "yes", "no", "yEs", "nO", "y", "n", "Y", "N"]
+        # check IEC prefix
+        self.assertEqual(parseByteSizeString(
+            '-16MiB'), 
+            {
+                'byte_value': -16777216,
+                'relative_value': -16,
+                'units': 'MiB'
+            }
+        )
 
-            testList_results = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]
+        # check that base is ignored if IEC is detected
+        self.assertEqual(parseByteSizeString(
+            '16MiB', base=10), 
+            {
+                'byte_value': 16777216,
+                'relative_value': 16,
+                'units': 'MiB'
+            }
+        )
 
-            self.assertTrue(normalizeBoolean(testList) == testList_results)
-            self.assertTrue(normalizeBoolean(testList) != (not testList_results))
+        # check base awareness
+        self.assertEqual(parseByteSizeString(
+            '-16MB', base=10), 
+            {
+                'byte_value': -16000000,
+                'relative_value': -16,
+                'units': 'MB'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '16MB', base=2), 
+            {
+                'byte_value': 16777216,
+                'relative_value': 16,
+                'units': 'MB'
+            }
+        )
+        self.assertEqual(parseByteSizeString(
+            '0GB', base=10), 
+            {
+                'byte_value': 0,
+                'relative_value': 0,
+                'units': 'GB'
+            }
+        )
+
+
+    def testNormalizeBoolean(self):
         
-        def testParseISO(self):
+        # test single string normalization
+        self.assertTrue(normalizeBoolean(1) == True)
+        self.assertTrue(normalizeBoolean('1') == True)
+        self.assertTrue(normalizeBoolean('true') == True)
+        self.assertTrue(normalizeBoolean('True') == True)
+        self.assertTrue(normalizeBoolean('yes') == True)
+        self.assertTrue(normalizeBoolean('y') == True)
+        
+        self.assertTrue(normalizeBoolean(0) == False)
+        self.assertTrue(normalizeBoolean('0') == False)
+        self.assertTrue(normalizeBoolean('false') == False)
+        self.assertTrue(normalizeBoolean('False') == False)
+        self.assertTrue(normalizeBoolean('no') == False)
+        self.assertTrue(normalizeBoolean('n') == False)
+
+        self.assertTrue(normalizeBoolean('') == '')
+        self.assertTrue(normalizeBoolean('') != True)
+        self.assertTrue(normalizeBoolean('') != False)
+        self.assertTrue(normalizeBoolean(None) == None)
+
+        self.assertTrue(normalizeBoolean(1, includeIntegers=False) == 1)
+        self.assertTrue(normalizeBoolean('1', includeIntegers=False) == '1')
+        self.assertTrue(isinstance(normalizeBoolean('1', includeIntegers=False), str))
+        self.assertTrue(normalizeBoolean(0, includeIntegers=False) == 0)
+        self.assertTrue(normalizeBoolean('0', includeIntegers=False) == '0')
+        self.assertTrue(isinstance(normalizeBoolean('0', includeIntegers=False), str))
+        
+        self.assertTrue(normalizeBoolean('someother') == 'someother')
+        
+        self.assertRaises(ValueError, normalizeBoolean, 'someother', enableStrictMode=True)
+
+        # test dictionary normalization
+        testDictionary = {
+        "lcT"   : "true",
+        "ucT"   : "True",
+        "lcF"   : "false",
+        "ucF"   : "False",
+        "numT"  : "1",
+        "numF"  : "0",
+        "ynT"   : "yes",
+        "ynF"   : "no",
+        "ynmT"  : "yEs",
+        "ynmF"  : "nO",
+        "ynsT"  : "y",
+        "ynsF"  : "n",
+        "ynsuT" : "Y",
+        "ynsuF" : "N"
+        }
+
+        testDictionary_results = {
+        "lcT"   : True,
+        "ucT"   : True,
+        "lcF"   : False,
+        "ucF"   : False,
+        "numT"  : True,
+        "numF"  : False,
+        "ynT"   : True,
+        "ynF"   : False,
+        "ynmT"  : True,
+        "ynmF"  : False,
+        "ynsT"  : True,
+        "ynsF"  : False,
+        "ynsuT" : True,
+        "ynsuF" : False
+        }
+
+        for k in testDictionary:
+            self.assertTrue( normalizeBoolean(testDictionary[k]) == testDictionary_results[k])
+            self.assertTrue( normalizeBoolean(testDictionary[k]) != (not testDictionary_results[k]))
+
+        # test list normalization
+        testList = [True, False, "True", "False", "true", "false", "1", "0", "yes", "no", "yEs", "nO", "y", "n", "Y", "N"]
+
+        testList_results = [True, False, True, False, True, False, True, False, True, False, True, False, True, False, True, False]
+
+        self.assertTrue(normalizeBoolean(testList) == testList_results)
+        self.assertTrue(normalizeBoolean(testList) != (not testList_results))
+    
+    def testParseISO(self):
+        
+        # test with T separator
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000-07:00'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000-0700'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000Z'), datetime(2005, 7, 1, 0, 0, 0, 0, utc))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000'), datetime(2005, 7, 1, 0, 0, 0, 0, localTZ))
+
+        # test with space separator
+        self.assertEqual(parseISO('2005-07-01 00:00:00.000-07:00'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
+        self.assertEqual(parseISO('2005-07-01 00:00:00.000-0700'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
+        self.assertEqual(parseISO('2005-07-01 00:00:00.000Z'), datetime(2005, 7, 1, 0, 0, 0, 0, utc))
+        self.assertEqual(parseISO('2005-07-01 00:00:00.000'), datetime(2005, 7, 1, 0, 0, 0, 0, localTZ))
+
+        # test milliseconds
+        self.assertEqual(parseISO('2005-07-01T13:45:57.000-07:00'), datetime(2005, 7, 1, 13, 45, 57, 0, TZInfo(-7*60, '')))
+        self.assertEqual(parseISO('2005-07-01T13:45:57.334-07:00'), datetime(2005, 7, 1, 13, 45, 57, 334000, TZInfo(-7*60, '')))
+
+        # test offsets with minutes defined
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000-07:45'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60-45, '')))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000-0745'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60-45, '')))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000+05:45'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(+5*60+45, '')))
+        self.assertEqual(parseISO('2005-07-01T00:00:00.000+0545'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(+5*60+45, '')))
+        
+    def testParseISOTZLocal(self):
+        '''check the timezone handling of parseISO in auto-set server locale'''
+
+        # check DST of local server (assume US PDT locale)
+        t = parseISO('2009-08-15T12:34:56.789')
+        self.assertEqual(str(t), '2009-08-15 12:34:56.789000-07:00')
+        
+        t_utctuple = t.utctimetuple()
+        self.assertEqual(t_utctuple.tm_year, 2009)
+        self.assertEqual(t_utctuple.tm_mon, 8)
+        self.assertEqual(t_utctuple.tm_mday, 15)
+        self.assertEqual(t_utctuple.tm_hour, 19)
+        self.assertEqual(t_utctuple.tm_min, 34)
+        self.assertEqual(t_utctuple.tm_sec, 56)
+        self.assertEqual(t_utctuple.tm_isdst, 0)
+
+        t_localtuple = time.localtime(int(t.strftime('%s')))
+        self.assertEqual(t_localtuple.tm_year, 2009)
+        self.assertEqual(t_localtuple.tm_mon, 8)
+        self.assertEqual(t_localtuple.tm_mday, 15)
+        self.assertEqual(t_localtuple.tm_hour, 12)
+        self.assertEqual(t_localtuple.tm_min, 34)
+        self.assertEqual(t_localtuple.tm_sec, 56)
+        self.assertEqual(t_localtuple.tm_isdst, 1)
+
+        # check non-DST of local server (assume US PST locale)
+        # should be 1 hour off, DST flag unset
+        t = parseISO('2009-11-15T12:34:56.789')
+        self.assertEqual(str(t), '2009-11-15 12:34:56.789000-08:00')
+
+        t_utctuple = t.utctimetuple()
+        self.assertEqual(t_utctuple.tm_year, 2009)
+        self.assertEqual(t_utctuple.tm_mon, 11)
+        self.assertEqual(t_utctuple.tm_mday, 15)
+        self.assertEqual(t_utctuple.tm_hour, 20)
+        self.assertEqual(t_utctuple.tm_min, 34)
+        self.assertEqual(t_utctuple.tm_sec, 56)
+        self.assertEqual(t_utctuple.tm_isdst, 0)
+        
+        t_localtuple = time.localtime(int(t.strftime('%s')))
+        self.assertEqual(t_localtuple.tm_year, 2009)
+        self.assertEqual(t_localtuple.tm_mon, 11)
+        self.assertEqual(t_localtuple.tm_mday, 15)
+        self.assertEqual(t_localtuple.tm_hour, 12)
+        self.assertEqual(t_localtuple.tm_min, 34)
+        self.assertEqual(t_localtuple.tm_sec, 56)
+        self.assertEqual(t_localtuple.tm_isdst, 0)
+
+
+    def testParseISOTZOffset(self):
+        '''check the timezone handling of parseISO in fixed offset'''
+
+        # check UTC normalization of fixed offset (while in DST zone)
+        t = parseISO('2009-08-15T12:34:56.789-05:00')
+        self.assertEqual(str(t), '2009-08-15 12:34:56.789000-05:00')
+        t_tuple = t.utctimetuple()
+        self.assertEqual(t_tuple.tm_year, 2009)
+        self.assertEqual(t_tuple.tm_mon, 8)
+        self.assertEqual(t_tuple.tm_mday, 15)
+        self.assertEqual(t_tuple.tm_hour, 17)
+        self.assertEqual(t_tuple.tm_min, 34)
+        self.assertEqual(t_tuple.tm_sec, 56)
+        self.assertEqual(t_tuple.tm_isdst, 0)
+
+
+        # check UTC normalization of fixed offset (while outside of DST zone)
+        # should be same as above
+        t = parseISO('2009-11-15T12:34:56.789-05:00')
+        self.assertEqual(str(t), '2009-11-15 12:34:56.789000-05:00')
+        t_tuple = t.utctimetuple()
+        self.assertEqual(t_tuple.tm_year, 2009)
+        self.assertEqual(t_tuple.tm_mon, 11)
+        self.assertEqual(t_tuple.tm_mday, 15)
+        self.assertEqual(t_tuple.tm_hour, 17)
+        self.assertEqual(t_tuple.tm_min, 34)
+        self.assertEqual(t_tuple.tm_sec, 56)
+        self.assertEqual(t_tuple.tm_isdst, 0)
+
+
+    def testParseISOTZUTC(self):
+        '''check the timezone handline of parseISO in UTC'''
+
+        # check UTC normalization of fixed offset (while in DST zone)
+        t = parseISO('2009-08-15T12:34:56.789z')
+        self.assertEqual(str(t), '2009-08-15 12:34:56.789000+00:00')
+        t_tuple = t.utctimetuple()
+        self.assertEqual(t_tuple.tm_year, 2009)
+        self.assertEqual(t_tuple.tm_mon, 8)
+        self.assertEqual(t_tuple.tm_mday, 15)
+        self.assertEqual(t_tuple.tm_hour, 12)
+        self.assertEqual(t_tuple.tm_min, 34)
+        self.assertEqual(t_tuple.tm_sec, 56)
+        self.assertEqual(t_tuple.tm_isdst, 0)
+
+
+        # check UTC normalization of fixed offset (while outside of DST zone)
+        # should be the same as above
+        t = parseISO('2009-11-15T12:34:56.789Z')
+        self.assertEqual(str(t), '2009-11-15 12:34:56.789000+00:00')
+        t_tuple = t.utctimetuple()
+        self.assertEqual(t_tuple.tm_year, 2009)
+        self.assertEqual(t_tuple.tm_mon, 11)
+        self.assertEqual(t_tuple.tm_mday, 15)
+        self.assertEqual(t_tuple.tm_hour, 12)
+        self.assertEqual(t_tuple.tm_min, 34)
+        self.assertEqual(t_tuple.tm_sec, 56)
+        self.assertEqual(t_tuple.tm_isdst, 0)
+
+
+    def testEpoch(self):
+        import decimal
+        
+        # check rounding errors
+        for ts in [
+            -1,
+            0,
+            1205775389,
+            '1205775389',
+            '1205775389.1', 
+            '1205775389.12', # compare to float(1205775389.12) ==> 1205775389.1199999
+            '1205775389.123', 
+            '1205775389.1234', 
+            '1205775389.12345', 
+            '1205775389.123456', 
+            '1205775389.9', 
+            '1205775389.99', 
+            '1205775389.999', 
+            '1205775389.9999', 
+            '1205775389.99999', 
+            '1205775389.999999',
+            '1205775389.9', 
+            '1205775389.09', 
+            '1205775389.009', 
+            '1205775389.0009', 
+            '1205775389.00009', 
+            '1205775389.000009'
+            ]:
+            ts = decimal.Decimal(ts)
+            if sys.version_info > (3, 0):
+                ts = float(decimal.Decimal(ts))
+            dt = datetime.utcfromtimestamp(ts)
+            dt2e = dt2epoch(dt)
+            if sys.version_info > (3, 0):
+                dt2e = float(str(dt2e).rstrip('0').rstrip('.') if '.' in str(dt2e) else str(dt2e))
+            self.assertEqual(dt2e, ts)
+        
+        # check expected rounding; datetime object is limited to microseconds
+        tm = decimal.Decimal('1205883921.1234567')
+        if sys.version_info > (3, 0):
+            tm = float(tm)
+        dt = datetime.utcfromtimestamp(tm)
+        self.assertEqual(dt2epoch(dt), decimal.Decimal('1205883921.123457'))
+        
+        # check null handling
+        self.assertRaises(ValueError, dt2epoch, None)
+
+
+    def testOrderedDict(self):
+        '''
+        test the ordered dictionary
+        '''
+
+        od = OrderedDict()
+
+        keys = 'abcdefghijklmnopqrstuvwxyz'
+        KEYS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+        keysd = []
+        for char in keys:
+            od[char] = 'foo'
+            keysd.append(char)
+
+        for i, k in enumerate(od):
+            self.assertEqual(k, keys[i])
             
-            # test with T separator
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000-07:00'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000-0700'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000Z'), datetime(2005, 7, 1, 0, 0, 0, 0, utc))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000'), datetime(2005, 7, 1, 0, 0, 0, 0, localTZ))
-
-            # test with space separator
-            self.assertEqual(parseISO('2005-07-01 00:00:00.000-07:00'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
-            self.assertEqual(parseISO('2005-07-01 00:00:00.000-0700'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60, '')))
-            self.assertEqual(parseISO('2005-07-01 00:00:00.000Z'), datetime(2005, 7, 1, 0, 0, 0, 0, utc))
-            self.assertEqual(parseISO('2005-07-01 00:00:00.000'), datetime(2005, 7, 1, 0, 0, 0, 0, localTZ))
-
-            # test milliseconds
-            self.assertEqual(parseISO('2005-07-01T13:45:57.000-07:00'), datetime(2005, 7, 1, 13, 45, 57, 0, TZInfo(-7*60, '')))
-            self.assertEqual(parseISO('2005-07-01T13:45:57.334-07:00'), datetime(2005, 7, 1, 13, 45, 57, 334000, TZInfo(-7*60, '')))
-
-            # test offsets with minutes defined
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000-07:45'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60-45, '')))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000-0745'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(-7*60-45, '')))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000+05:45'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(+5*60+45, '')))
-            self.assertEqual(parseISO('2005-07-01T00:00:00.000+0545'), datetime(2005, 7, 1, 0, 0, 0, 0, TZInfo(+5*60+45, '')))
+        for i in range(-1, -5, -1):
+            self.assertEqual(keys[i], od.popitem()[0])
+        
+        KEYSd = []    
+        for char in KEYS:
+            od[char] = 'bar'
+            KEYSd.append(char)
             
-        def testParseISOTZLocal(self):
-            '''check the timezone handling of parseISO in auto-set server locale'''
-
-            # check DST of local server (assume US PDT locale)
-            t = parseISO('2009-08-15T12:34:56.789')
-            self.assertEqual(str(t), '2009-08-15 12:34:56.789000-07:00')
-            
-            t_utctuple = t.utctimetuple()
-            self.assertEqual(t_utctuple.tm_year, 2009)
-            self.assertEqual(t_utctuple.tm_mon, 8)
-            self.assertEqual(t_utctuple.tm_mday, 15)
-            self.assertEqual(t_utctuple.tm_hour, 19)
-            self.assertEqual(t_utctuple.tm_min, 34)
-            self.assertEqual(t_utctuple.tm_sec, 56)
-            self.assertEqual(t_utctuple.tm_isdst, 0)
-
-            t_localtuple = time.localtime(int(t.strftime('%s')))
-            self.assertEqual(t_localtuple.tm_year, 2009)
-            self.assertEqual(t_localtuple.tm_mon, 8)
-            self.assertEqual(t_localtuple.tm_mday, 15)
-            self.assertEqual(t_localtuple.tm_hour, 12)
-            self.assertEqual(t_localtuple.tm_min, 34)
-            self.assertEqual(t_localtuple.tm_sec, 56)
-            self.assertEqual(t_localtuple.tm_isdst, 1)
-
-            # check non-DST of local server (assume US PST locale)
-            # should be 1 hour off, DST flag unset
-            t = parseISO('2009-11-15T12:34:56.789')
-            self.assertEqual(str(t), '2009-11-15 12:34:56.789000-08:00')
-
-            t_utctuple = t.utctimetuple()
-            self.assertEqual(t_utctuple.tm_year, 2009)
-            self.assertEqual(t_utctuple.tm_mon, 11)
-            self.assertEqual(t_utctuple.tm_mday, 15)
-            self.assertEqual(t_utctuple.tm_hour, 20)
-            self.assertEqual(t_utctuple.tm_min, 34)
-            self.assertEqual(t_utctuple.tm_sec, 56)
-            self.assertEqual(t_utctuple.tm_isdst, 0)
-            
-            t_localtuple = time.localtime(int(t.strftime('%s')))
-            self.assertEqual(t_localtuple.tm_year, 2009)
-            self.assertEqual(t_localtuple.tm_mon, 11)
-            self.assertEqual(t_localtuple.tm_mday, 15)
-            self.assertEqual(t_localtuple.tm_hour, 12)
-            self.assertEqual(t_localtuple.tm_min, 34)
-            self.assertEqual(t_localtuple.tm_sec, 56)
-            self.assertEqual(t_localtuple.tm_isdst, 0)
-
-
-        def testParseISOTZOffset(self):
-            '''check the timezone handling of parseISO in fixed offset'''
-
-            # check UTC normalization of fixed offset (while in DST zone)
-            t = parseISO('2009-08-15T12:34:56.789-05:00')
-            self.assertEqual(str(t), '2009-08-15 12:34:56.789000-05:00')
-            t_tuple = t.utctimetuple()
-            self.assertEqual(t_tuple.tm_year, 2009)
-            self.assertEqual(t_tuple.tm_mon, 8)
-            self.assertEqual(t_tuple.tm_mday, 15)
-            self.assertEqual(t_tuple.tm_hour, 17)
-            self.assertEqual(t_tuple.tm_min, 34)
-            self.assertEqual(t_tuple.tm_sec, 56)
-            self.assertEqual(t_tuple.tm_isdst, 0)
-
-
-            # check UTC normalization of fixed offset (while outside of DST zone)
-            # should be same as above
-            t = parseISO('2009-11-15T12:34:56.789-05:00')
-            self.assertEqual(str(t), '2009-11-15 12:34:56.789000-05:00')
-            t_tuple = t.utctimetuple()
-            self.assertEqual(t_tuple.tm_year, 2009)
-            self.assertEqual(t_tuple.tm_mon, 11)
-            self.assertEqual(t_tuple.tm_mday, 15)
-            self.assertEqual(t_tuple.tm_hour, 17)
-            self.assertEqual(t_tuple.tm_min, 34)
-            self.assertEqual(t_tuple.tm_sec, 56)
-            self.assertEqual(t_tuple.tm_isdst, 0)
-
-
-        def testParseISOTZUTC(self):
-            '''check the timezone handline of parseISO in UTC'''
-
-            # check UTC normalization of fixed offset (while in DST zone)
-            t = parseISO('2009-08-15T12:34:56.789z')
-            self.assertEqual(str(t), '2009-08-15 12:34:56.789000+00:00')
-            t_tuple = t.utctimetuple()
-            self.assertEqual(t_tuple.tm_year, 2009)
-            self.assertEqual(t_tuple.tm_mon, 8)
-            self.assertEqual(t_tuple.tm_mday, 15)
-            self.assertEqual(t_tuple.tm_hour, 12)
-            self.assertEqual(t_tuple.tm_min, 34)
-            self.assertEqual(t_tuple.tm_sec, 56)
-            self.assertEqual(t_tuple.tm_isdst, 0)
-
-
-            # check UTC normalization of fixed offset (while outside of DST zone)
-            # should be the same as above
-            t = parseISO('2009-11-15T12:34:56.789Z')
-            self.assertEqual(str(t), '2009-11-15 12:34:56.789000+00:00')
-            t_tuple = t.utctimetuple()
-            self.assertEqual(t_tuple.tm_year, 2009)
-            self.assertEqual(t_tuple.tm_mon, 11)
-            self.assertEqual(t_tuple.tm_mday, 15)
-            self.assertEqual(t_tuple.tm_hour, 12)
-            self.assertEqual(t_tuple.tm_min, 34)
-            self.assertEqual(t_tuple.tm_sec, 56)
-            self.assertEqual(t_tuple.tm_isdst, 0)
-
-
-        def testEpoch(self):
-            import decimal
-            
-            # check rounding errors
-            for ts in [
-                -1,
-                0,
-                1205775389,
-                '1205775389',
-                '1205775389.1', 
-                '1205775389.12', # compare to float(1205775389.12) ==> 1205775389.1199999
-                '1205775389.123', 
-                '1205775389.1234', 
-                '1205775389.12345', 
-                '1205775389.123456', 
-                '1205775389.9', 
-                '1205775389.99', 
-                '1205775389.999', 
-                '1205775389.9999', 
-                '1205775389.99999', 
-                '1205775389.999999',
-                '1205775389.9', 
-                '1205775389.09', 
-                '1205775389.009', 
-                '1205775389.0009', 
-                '1205775389.00009', 
-                '1205775389.000009'
-                ]:
-                ts = decimal.Decimal(ts)
-                dt = datetime.utcfromtimestamp(ts)
-                self.assertEqual(dt2epoch(dt), ts)
-            
-            # check expected rounding; datetime object is limited to microseconds
-            dt = datetime.utcfromtimestamp(decimal.Decimal('1205883921.1234567'))
-            self.assertEqual(dt2epoch(dt), decimal.Decimal('1205883921.123457'))
-            
-            # check null handling
-            self.assertRaises(ValueError, dt2epoch, None)
-
-
-        def testOrderedDict(self):
-            '''
-            test the ordered dictionary
-            '''
-
-            od = OrderedDict()
-
-            keys = 'abcdefghijklmnopqrstuvwxyz'
-            KEYS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-
-            keysd = []
-            for char in keys:
-                od[char] = 'foo'
-                keysd.append(char)
-
-            for i, k in enumerate(od):
-                self.assertEqual(k, keys[i])
-                
-            for i in range(-1, -5, -1):
-                self.assertEqual(keys[i], od.popitem()[0])
-            
-            KEYSd = []    
-            for char in KEYS:
-                od[char] = 'bar'
-                KEYSd.append(char)
-                
-            combined = keysd[0:-4] + KEYSd
-            for i, k in enumerate(od):
-                self.assertEqual(combined[i], k)
-                    
-
-        def testGetIsoTime(self):
-            
-            self.assertEqual(
-                getISOTime(datetime(2005,7,1,0,0,0,2000,TZInfo(-7*60,''))),
-                '2005-07-01T00:00:00.002-0700')
-
-            self.assertEqual(
-                getISOTime(datetime(2005,7,1,0,0,0,0,TZInfo(-7*60,''))),
-                '2005-07-01T00:00:00-0700')
-
-            self.assertEqual(
-                getISOTime(datetime(2005,7,1,0,0,0,5,TZInfo(-7*60,''))),
-                '2005-07-01T00:00:00.000-0700')
-
-            self.assertEqual(
-                getISOTime(datetime(2005,7,1,0,0,0,0,TZInfo(-7*60,''))),
-                '2005-07-01T00:00:00-0700')
-            
-            self.assertEqual(
-                getISOTime(time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0))),
-                '2008-09-26T21:49:50-0700')
-
-
-        def assertQueryArgsEqual(self, queryStringOne, queryStringTwo):
-            """ assert that the two query strings contain the exact same
-                set of query args, regardless of order """
-            queryStringOneParts = queryStringOne.split("&")
-            queryStringTwoParts = queryStringTwo.split("&")
-            self.assertItemsEqual(queryStringOneParts, queryStringTwoParts)        
-
-        def testUrlencodeDict(self):
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':'bar'}),
-                'foo=bar'
-            )
-            
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':'bar1 bar2'}),
-                'foo=bar1%20bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo1':'bar1', 'foo2':'bar2'}),
-                'foo1=bar1&foo2=bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo1':'bar1a bar1b', 'foo2':'bar2'}),
-                'foo1=bar1a%20bar1b&foo2=bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':['bar1', 'bar2']}),
-                'foo=bar1&foo=bar2'
-            )
-            
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':['bar1a bar1b', 'bar2']}),
-                'foo=bar1a%20bar1b&foo=bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':['bar1', 'bar2'], 'needle':'haystack'}),
-                'needle=haystack&foo=bar1&foo=bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'foo':['bar1', 'bar2'], 'needle':'haystack1 haystack2'}),
-                'needle=haystack1%20haystack2&foo=bar1&foo=bar2'
-            )
-            
-            self.assertQueryArgsEqual(
-                urlencodeDict({'needle':'haystack', 'foo':['bar1', 'bar2']}),
-                'needle=haystack&foo=bar1&foo=bar2'
-            )
-            
-            self.assertQueryArgsEqual(
-                urlencodeDict({'needle':'haystack1 haystack2', 'foo':['bar1', 'bar2']}),
-                'needle=haystack1%20haystack2&foo=bar1&foo=bar2'
-            )
-
-            self.assertQueryArgsEqual(
-                urlencodeDict({'needle1':'haystack1', 'foo':['bar1', 'bar2'], 'needle2':'haystack2'}),
-                'needle1=haystack1&needle2=haystack2&foo=bar1&foo=bar2'
-            )
-            
-            self.assertQueryArgsEqual(
-                urlencodeDict({'needle1':'haystack1', 'foo':['bar1', 'bar2'], 'needle2':'haystack2a haystack2b'}),
-                'needle1=haystack1&needle2=haystack2a%20haystack2b&foo=bar1&foo=bar2'
-            )
-
-        def assertUnicode(self, string):
-            self.assertEqual(type(string), unicode, 'String should be unicode')
-
-        def test_string_to_unicode_simple(self):
-            self.assertUnicode(objUnicode('foo'))
-            self.assertUnicode(objUnicode(u'foo'))
-
-        def test_string_to_unicode_iter(self):
-            listStrs = ['one', 'two', u'three', u'KivimÃ¤ki2', 'KivimÃ¤ki2', 4, ['notUnicode']]
-            listStrsOut = objUnicode(listStrs, deep=False)
-            foundNum = False
-            for string in listStrsOut:
-                if isinstance(string, str):
-                    self.assertUnicode(string)
-                if isinstance(string, int):
-                    foundNum = True
-            self.assertEqual(type(listStrsOut[6]), list, 'Should not convert second order objects.')
-            self.assertEqual(type(listStrsOut[6][0]), str, 'Second order objects should preserve their internal str objs.')
-            self.assertTrue(foundNum, 'Should not convert integers.')
-            
-            dictStrs = {'one': u'one', 'two': 'KivimÃ¤ki2', 'three': 3, 'four': {'first': 'bar'}}
-            dictStrsOut = objUnicode(dictStrs, deep=False)
-            foundNum = False
-            for key in dictStrsOut:
-                if isinstance(dictStrsOut[key], str):
-                    self.assertUnicode(dictStrsOut[key])
-                if isinstance(dictStrsOut[key], int):
-                    foundNum = True
-            self.assertEqual(type(dictStrsOut['four']['first']), str, 'Should not convert second order objects.')
-            self.assertTrue(foundNum, 'Should not convert integers.')
-
-        def test_string_to_unicode_preserve_tuples(self):
-            listWithTuples = ['one', 'two', ('tup', 'tup', ('duptup', 'duptup'))]
-            listWithTuplesOut = objUnicode(listWithTuples)
-            self.assertUnicode(listWithTuplesOut[0])
-            self.assertUnicode(listWithTuplesOut[2][0])
-            self.assertUnicode(listWithTuplesOut[2][1])
-            self.assertUnicode(listWithTuplesOut[2][2][1])
-            self.assertEqual(type(listWithTuplesOut[2]), tuple, 'Should preserve tuples')
-            self.assertEqual(type(listWithTuplesOut[2][2]), tuple, 'Should preserve tuples')
-
-        def test_string_to_unicode_depth_checks(self):
-            deepList = ['one', ['two', 'KivimÃ¤ki2', ['level3', 5]]]
-            deepListOut = objUnicode(deepList)
-            self.assertUnicode(deepListOut[0])
-            self.assertUnicode(deepListOut[1][0])
-            self.assertUnicode(deepListOut[1][1])
-            self.assertUnicode(deepListOut[1][2][0])
-            self.assertTrue(isinstance(deepListOut[1][2][1], int))
-
-            anotherDict = {'one': 'one', 'two': {'two_d': 2, 'three_d': u'three', 'four_d': 'four'}, 'uni': 'KivimÃ¤ki2'}
-            anotherDictOut = objUnicode(anotherDict)
-            self.assertUnicode(anotherDictOut['one'])
-            self.assertUnicode(anotherDictOut['two']['three_d'])
-            self.assertUnicode(anotherDictOut['two']['four_d'])
-            self.assertUnicode(anotherDictOut['uni'])
-            self.assertTrue(isinstance(anotherDictOut['two']['two_d'], int), 'Should not convert integers.')
-
-        def test_string_to_unicode_in_objects_like_dicts(self):
-            origin = [('one', 'one'), ('two', 'two')]
-            ordered = OrderedDict(origin)
-            orderedOut = objUnicode(ordered)
-            self.assertTrue((ordered is not orderedOut), 'objUnicode should return new objects.')
-            for idx, key in enumerate(orderedOut):
-                self.assertEqual(key, origin[idx][0], 'objUnicode should preserve order when its important')
-                self.assertUnicode(orderedOut[key])
-
-        def test_toUTF8(self):
-            test_str = 'KivimÃ¤ki2'
-            test_unicode = u'KivimÃ¤ki2'
-
-            str_to_utf8 = toUTF8(test_str)
-            unicode_to_utf8 = toUTF8(test_unicode)
-
-            self.assertEqual(type(str_to_utf8), str, 'toUTF8 should always return a string.')
-            self.assertEqual(type(unicode_to_utf8), str, 'toUTF8 should always return a string.')
-            self.assertEqual(str_to_utf8, unicode_to_utf8, 'The output of toUTF8 should be consistent.')
-
-        def test_safeURLQuote(self):
-            test_st = 'KivimÃ¤ki2'
-            test_unicode = u'KivimÃ¤ki2'
-
-            self.assertEqual(type(safeURLQuote(test_st)), str, 'safeURLQuote always returns strings.')
-            self.assertEqual(type(safeURLQuote(test_unicode)), str, 'safeURLQuote always returns strings.')
-
-            test_st_unquote = parse.unquote(safeURLQuote(test_st))
-            self.assertEqual(test_st, test_st_unquote, 'strings passed through safeURLQuote and parse.unquote should be equal to their str equivalent.')
-
-        def test_isRedirectSafe(self):
-            self.assertEqual(isRedirectSafe('javascript:alert("foo")'), False, 'isRedirectSafe should not allow javascript: urls')
-            self.assertEqual(isRedirectSafe('javascript\\t:alert(document.domain)//?qwe'), False, 'isRedirectSafe should not allow javascript: urls')
-            self.assertEqual(isRedirectSafe('javascript\t:d=document%3Bs=d.createElement(`script`)%3Bs.src=`//localhost:80/alert.js`%3Bd.body.append(s)//?'), False, 'isRedirectSafe should not allow javascript: urls')    
-            self.assertEqual(isRedirectSafe('http://foo.com'), False, 'isRedirectSafe should not allow urls with an http protocol scheme')
-            self.assertEqual(isRedirectSafe('https://foo.com'), False, 'isRedirectSafe should not allow urls with an https protocol scheme')
-            self.assertEqual(isRedirectSafe('random://foo.com'), False, 'isRedirectSafe should not allow urls with a protocol scheme')
-            self.assertEqual(isRedirectSafe('//foo.com'), False, 'isRedirectSafe should not allow urls to start with a double forward slash')
-            self.assertEqual(isRedirectSafe('/foo/bar/baz'), True, 'isRedirectSafe should allow relative urls')
-            self.assertEqual(isRedirectSafe('foo/bar/baz'), True, 'isRedirectSafe should allow relative urls')
-            self.assertEqual(isRedirectSafe(''), False, 'isRedirectSafe should return False for an empty string')
-            self.assertEqual(isRedirectSafe(None), False, 'isRedirectSafe should return False for None')
-
-        def test_sanitizeBreadcrumbs(self):
-            crumbs = [
-                ['foo', 'http://foo.com'],  # invalid url (protocol)
-                ['bar', '//foo.com'],       # invalid url (double forwardslash)
-                ['baz', 'javascript:alert'], # invalid url (urlscheme)
-                ['foobar', '/foo/bar'],     # valid path
-                ['beep']                    # no url
-            ]
-            expected = [
-                ['foo', '/'],
-                ['bar', '/'],
-                ['baz', '/'],
-                ['foobar', '/foo/bar'],
-                ['beep']
-            ]
-            self.assertListEqual(sanitizeBreadcrumbs(crumbs), expected, 'sanitizeBreadcrumbs did not sanitize url')
-            self.assertListEqual(sanitizeBreadcrumbs('foo'), [], 'sanitizeBreadcrumbs throws away non-list input')
-
-        def test_stringToFieldList(self):
-            field_list_cases = [
-                [None, []],
-                ['', []],
-                ['one_field', ['one_field']],
-                [' one_field', ['one_field']],
-                [' one_field ', ['one_field']],
-                ['a, b, c', ['a', 'b', 'c']],
-                ['a b c', ['a', 'b', 'c']],
-                ['a,b,c', ['a', 'b', 'c']],
-                ['a   b,c', ['a', 'b', 'c']],
-                ['one\\ two\\', ["one\\", "two\\"]],
-                ['one \\\\', ["one", "\\"]],
-                ["one \\\\\ \ ", ["one", "\\\\", "\\"]],
-                ["one,\\", ["one", "\\"]],
-                ['_raw,foo \\ bar, "baz \\', ['_raw', 'foo', '\\', 'bar', 'baz \\']],
-                ['one,two,three"', ["one", "two", "three"]],
-                ['one,"\\\\",two', ["one", "\\", "two"]],
-                ['one,"\\\\","two\\\\three\\\\four"', ["one", "\\", "two\\three\\four"]],
-
-                ['_raw,"first \\\\ ip","\\"weird quoted string\\"","random\\"quote"', ["_raw", "first \\ ip", '"weird quoted string"', 'random"quote']]
-            ]
-
-            for pair in field_list_cases:
-                self.assertEqual(stringToFieldList(pair[0]), pair[1])
+        combined = keysd[0:-4] + KEYSd
+        for i, k in enumerate(od):
+            self.assertEqual(combined[i], k)
                 
 
-        def test_fieldListToString(self):
-            field_list_cases = [
-                ['', []],
-                ['one_field', ['one_field']],
-                ['a,b,c', ['a', 'b', 'c']],
-                ['a,"foo\\\\bar",c', ['a', 'foo\\bar', 'c']],
-                ['a,b,c,"d,e"', ['a', 'b', 'c', 'd,e']],
-                ['"one\\\\",two', ["one\\", "two"]],
-                ['_raw,foo,"\\\\",bar,"baz \\\\"', ['_raw', 'foo', '\\', 'bar', 'baz \\']],
-                ['one,"\\\\",two', ["one", "\\", "two"]],
-                ['one,"\\\\","two\\\\three\\\\four"', ["one", "\\", "two\\three\\four"]],
-                ['"one\\\\",two,three,\'four,\'and\',not,"five\'\\\\","\\\\","six\\\\"', ["one\\", "two", "three", "'four", "'and'", "not", "five'\\", "\\", "six\\"]],
+    def testGetIsoTime(self):
+        
+        self.assertEqual(
+            getISOTime(datetime(2005,7,1,0,0,0,2000,TZInfo(-7*60,''))),
+            '2005-07-01T00:00:00.002' + format_local_tzoffset())
 
-                # Test what we give is what we get
-                ['_raw,"first \\\\ ip","\\"weird quoted string\\"","random\\"quote"', ["_raw", "first \ ip", '"weird quoted string"', 'random"quote']]
-            ]
-            for pair in field_list_cases:
-                self.assertEqual(fieldListToString(pair[1]), pair[0])
+        self.assertEqual(
+            getISOTime(datetime(2005,7,1,0,0,0,0,TZInfo(-7*60,''))),
+            '2005-07-01T00:00:00' + format_local_tzoffset())
+
+        self.assertEqual(
+            getISOTime(datetime(2005,7,1,0,0,0,5,TZInfo(-7*60,''))),
+            '2005-07-01T00:00:00.000' + format_local_tzoffset())
+
+        self.assertEqual(
+            getISOTime(datetime(2005,7,1,0,0,0,0,TZInfo(-7*60,''))),
+            '2005-07-01T00:00:00' + format_local_tzoffset())
+        
+        self.assertEqual(
+            getISOTime(time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0))),
+            '2008-09-26T21:49:50' + format_local_tzoffset())
+
+
+    def assertQueryArgsEqual(self, queryStringOne, queryStringTwo):
+        """ assert that the two query strings contain the exact same
+            set of query args, regardless of order """
+        queryStringOneParts = queryStringOne.split("&")
+        queryStringTwoParts = queryStringTwo.split("&")
+        if sys.version_info > (3, 0):
+            self.assertCountEqual(queryStringOneParts, queryStringTwoParts)
+        else:
+            self.assertItemsEqual(queryStringOneParts, queryStringTwoParts)
+
+    def testUrlencodeDict(self):
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':'bar'}),
+            'foo=bar'
+        )
+        
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':'bar1 bar2'}),
+            'foo=bar1%20bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo1':'bar1', 'foo2':'bar2'}),
+            'foo1=bar1&foo2=bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo1':'bar1a bar1b', 'foo2':'bar2'}),
+            'foo1=bar1a%20bar1b&foo2=bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':['bar1', 'bar2']}),
+            'foo=bar1&foo=bar2'
+        )
+        
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':['bar1a bar1b', 'bar2']}),
+            'foo=bar1a%20bar1b&foo=bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':['bar1', 'bar2'], 'needle':'haystack'}),
+            'needle=haystack&foo=bar1&foo=bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'foo':['bar1', 'bar2'], 'needle':'haystack1 haystack2'}),
+            'needle=haystack1%20haystack2&foo=bar1&foo=bar2'
+        )
+        
+        self.assertQueryArgsEqual(
+            urlencodeDict({'needle':'haystack', 'foo':['bar1', 'bar2']}),
+            'needle=haystack&foo=bar1&foo=bar2'
+        )
+        
+        self.assertQueryArgsEqual(
+            urlencodeDict({'needle':'haystack1 haystack2', 'foo':['bar1', 'bar2']}),
+            'needle=haystack1%20haystack2&foo=bar1&foo=bar2'
+        )
+
+        self.assertQueryArgsEqual(
+            urlencodeDict({'needle1':'haystack1', 'foo':['bar1', 'bar2'], 'needle2':'haystack2'}),
+            'needle1=haystack1&needle2=haystack2&foo=bar1&foo=bar2'
+        )
+        
+        self.assertQueryArgsEqual(
+            urlencodeDict({'needle1':'haystack1', 'foo':['bar1', 'bar2'], 'needle2':'haystack2a haystack2b'}),
+            'needle1=haystack1&needle2=haystack2a%20haystack2b&foo=bar1&foo=bar2'
+        )
+
+    def assertUnicode(self, string):
+        self.assertEqual(type(string), unicode, 'String should be unicode')
+
+    def test_string_to_unicode_simple(self):
+        self.assertUnicode(objUnicode('foo'))
+        self.assertUnicode(objUnicode(u'foo'))
+
+    def test_string_to_unicode_iter(self):
+        listStrs = ['one', 'two', u'three', u'KivimÃ¤ki2', 'KivimÃ¤ki2', 4, ['notUnicode']]
+        listStrsOut = objUnicode(listStrs, deep=False)
+        foundNum = False
+        for string in listStrsOut:
+            if isinstance(string, str):
+                self.assertUnicode(string)
+            if isinstance(string, int):
+                foundNum = True
+        self.assertEqual(type(listStrsOut[6]), list, 'Should not convert second order objects.')
+        self.assertEqual(type(listStrsOut[6][0]), str, 'Second order objects should preserve their internal str objs.')
+        self.assertTrue(foundNum, 'Should not convert integers.')
+        
+        dictStrs = {'one': u'one', 'two': 'KivimÃ¤ki2', 'three': 3, 'four': {'first': 'bar'}}
+        dictStrsOut = objUnicode(dictStrs, deep=False)
+        foundNum = False
+        for key in dictStrsOut:
+            if isinstance(dictStrsOut[key], str):
+                self.assertUnicode(dictStrsOut[key])
+            if isinstance(dictStrsOut[key], int):
+                foundNum = True
+        self.assertEqual(type(dictStrsOut['four']['first']), str, 'Should not convert second order objects.')
+        self.assertTrue(foundNum, 'Should not convert integers.')
+
+    def test_string_to_unicode_preserve_tuples(self):
+        listWithTuples = ['one', 'two', ('tup', 'tup', ('duptup', 'duptup'))]
+        listWithTuplesOut = objUnicode(listWithTuples)
+        self.assertUnicode(listWithTuplesOut[0])
+        self.assertUnicode(listWithTuplesOut[2][0])
+        self.assertUnicode(listWithTuplesOut[2][1])
+        self.assertUnicode(listWithTuplesOut[2][2][1])
+        self.assertEqual(type(listWithTuplesOut[2]), tuple, 'Should preserve tuples')
+        self.assertEqual(type(listWithTuplesOut[2][2]), tuple, 'Should preserve tuples')
+
+    def test_string_to_unicode_depth_checks(self):
+        deepList = ['one', ['two', 'KivimÃ¤ki2', ['level3', 5]]]
+        deepListOut = objUnicode(deepList)
+        self.assertUnicode(deepListOut[0])
+        self.assertUnicode(deepListOut[1][0])
+        self.assertUnicode(deepListOut[1][1])
+        self.assertUnicode(deepListOut[1][2][0])
+        self.assertTrue(isinstance(deepListOut[1][2][1], int))
+
+        anotherDict = {'one': 'one', 'two': {'two_d': 2, 'three_d': u'three', 'four_d': 'four'}, 'uni': 'KivimÃ¤ki2'}
+        anotherDictOut = objUnicode(anotherDict)
+        self.assertUnicode(anotherDictOut['one'])
+        self.assertUnicode(anotherDictOut['two']['three_d'])
+        self.assertUnicode(anotherDictOut['two']['four_d'])
+        self.assertUnicode(anotherDictOut['uni'])
+        self.assertTrue(isinstance(anotherDictOut['two']['two_d'], int), 'Should not convert integers.')
+
+    def test_string_to_unicode_in_objects_like_dicts(self):
+        origin = [('one', 'one'), ('two', 'two')]
+        ordered = OrderedDict(origin)
+        orderedOut = objUnicode(ordered)
+        self.assertTrue((ordered is not orderedOut), 'objUnicode should return new objects.')
+        for idx, key in enumerate(orderedOut):
+            self.assertEqual(key, origin[idx][0], 'objUnicode should preserve order when its important')
+            self.assertUnicode(orderedOut[key])
+
+    def test_toUTF8(self):
+        test_str = 'KivimÃ¤ki2'
+        test_unicode = u'KivimÃ¤ki2'
+
+        str_to_utf8 = toUTF8(test_str)
+        unicode_to_utf8 = toUTF8(test_unicode)
+
+        if sys.version_info > (3, 0):
+            str_to_utf8 = str_to_utf8.decode()
+            unicode_to_utf8 = unicode_to_utf8.decode()
+
+        self.assertEqual(type(str_to_utf8), str, 'toUTF8 should always return a string.')
+        self.assertEqual(type(unicode_to_utf8), str, 'toUTF8 should always return a string.')
+        self.assertEqual(str_to_utf8, unicode_to_utf8, 'The output of toUTF8 should be consistent.')
+
+    def test_safeURLQuote(self):
+        test_st = 'KivimÃ¤ki2'
+        test_unicode = u'KivimÃ¤ki2'
+
+        self.assertEqual(type(safeURLQuote(test_st)), str, 'safeURLQuote always returns strings.')
+        self.assertEqual(type(safeURLQuote(test_unicode)), str, 'safeURLQuote always returns strings.')
+
+        test_st_unquote = parse.unquote(safeURLQuote(test_st))
+        self.assertEqual(test_st, test_st_unquote, 'strings passed through safeURLQuote and parse.unquote should be equal to their str equivalent.')
+
+    @pytest_mark_skipif(sys.version_info < (3, 0), reason="Flaky on Python 2")
+    def test_isRedirectSafe(self):
+        self.assertEqual(isRedirectSafe('javascript:alert("foo")'), False, 'isRedirectSafe should not allow javascript: urls')
+        self.assertEqual(isRedirectSafe('javascript%26%23x3a%3balert(document.domain)'), False, 'isRedirectSafe should not allow encoded javascript: urls')
+        self.assertEqual(isRedirectSafe('%26Tab%3bjavascript:alert(document.domain)//qwe%23'), False, 'isRedirectSafe should not allow encoded javascript: urls even when padded with whitespaces')
+        self.assertEqual(isRedirectSafe('javascript\\t:alert(document.domain)//?qwe'), False, 'isRedirectSafe should not allow javascript: urls')
+        self.assertEqual(isRedirectSafe('javascript\t:d=document%3Bs=d.createElement(`script`)%3Bs.src=`//localhost:80/alert.js`%3Bd.body.append(s)//?'), False, 'isRedirectSafe should not allow javascript: urls')    
+        self.assertEqual(isRedirectSafe('http://foo.com'), False, 'isRedirectSafe should not allow urls with an http protocol scheme')
+        self.assertEqual(isRedirectSafe('https://foo.com'), False, 'isRedirectSafe should not allow urls with an https protocol scheme')
+        self.assertEqual(isRedirectSafe('random://foo.com'), False, 'isRedirectSafe should not allow urls with a protocol scheme')
+        self.assertEqual(isRedirectSafe('//foo.com'), False, 'isRedirectSafe should not allow urls to start with a double forward slash')
+        self.assertEqual(isRedirectSafe('/foo/bar/baz'), True, 'isRedirectSafe should allow relative urls')
+        self.assertEqual(isRedirectSafe('foo/bar/baz'), True, 'isRedirectSafe should allow relative urls')
+        self.assertEqual(isRedirectSafe(''), False, 'isRedirectSafe should return False for an empty string')
+        self.assertEqual(isRedirectSafe(None), False, 'isRedirectSafe should return False for None')
+
+    def test_sanitizeBreadcrumbs(self):
+        crumbs = [
+            ['foo', 'http://foo.com'],  # invalid url (protocol)
+            ['bar', '//foo.com'],       # invalid url (double forwardslash)
+            ['baz', 'javascript:alert'], # invalid url (urlscheme)
+            ['foobar', '/foo/bar'],     # valid path
+            ['beep']                    # no url
+        ]
+        expected = [
+            ['foo', '/'],
+            ['bar', '/'],
+            ['baz', '/'],
+            ['foobar', '/foo/bar'],
+            ['beep']
+        ]
+        self.assertListEqual(sanitizeBreadcrumbs(crumbs), expected, 'sanitizeBreadcrumbs did not sanitize url')
+        self.assertListEqual(sanitizeBreadcrumbs('foo'), [], 'sanitizeBreadcrumbs throws away non-list input')
+
+    def test_stringToFieldList(self):
+        field_list_cases = [
+            [None, []],
+            ['', []],
+            ['one_field', ['one_field']],
+            [' one_field', ['one_field']],
+            [' one_field ', ['one_field']],
+            ['a, b, c', ['a', 'b', 'c']],
+            ['a b c', ['a', 'b', 'c']],
+            ['a,b,c', ['a', 'b', 'c']],
+            ['a   b,c', ['a', 'b', 'c']],
+            ['one\\ two\\', ["one\\", "two\\"]],
+            ['one \\\\', ["one", "\\"]],
+            ["one \\\\\ \ ", ["one", "\\\\", "\\"]],
+            ["one,\\", ["one", "\\"]],
+            ['_raw,foo \\ bar, "baz \\', ['_raw', 'foo', '\\', 'bar', 'baz \\']],
+            ['one,two,three"', ["one", "two", "three"]],
+            ['one,"\\\\",two', ["one", "\\", "two"]],
+            ['one,"\\\\","two\\\\three\\\\four"', ["one", "\\", "two\\three\\four"]],
+
+            ['_raw,"first \\\\ ip","\\"weird quoted string\\"","random\\"quote"', ["_raw", "first \\ ip", '"weird quoted string"', 'random"quote']]
+        ]
+
+        for pair in field_list_cases:
+            self.assertEqual(stringToFieldList(pair[0]), pair[1])
             
-        def test_smartTrim(self):
-            
-            s = '1234567890';
 
-            self.assertEqual(smartTrim('', 23), '');
-            self.assertEqual(smartTrim(None, 23), None);
-            self.assertEqual(smartTrim(s, -1), '1234567890');
-            self.assertEqual(smartTrim(s, 0), '1234567890');
-            self.assertEqual(smartTrim(s, 1), '1...');
-            self.assertEqual(smartTrim(s, 2), '1...0');
-            self.assertEqual(smartTrim(s, 3), '1...90');
-            self.assertEqual(smartTrim(s, 4), '12...90');
-            self.assertEqual(smartTrim(s, 5), '12...890');
-            self.assertEqual(smartTrim(s, 6), '123...890');
-            self.assertEqual(smartTrim(s, 7), '123...7890');
-            self.assertEqual(smartTrim(s, 8), '1234...7890');
-            self.assertEqual(smartTrim(s, 9), '1234...67890');
-            self.assertEqual(smartTrim(s, 10), '1234567890');
-            self.assertEqual(smartTrim(s, 11), '1234567890');
+    def test_fieldListToString(self):
+        field_list_cases = [
+            ['', []],
+            ['one_field', ['one_field']],
+            ['a,b,c', ['a', 'b', 'c']],
+            ['a,"foo\\\\bar",c', ['a', 'foo\\bar', 'c']],
+            ['a,b,c,"d,e"', ['a', 'b', 'c', 'd,e']],
+            ['"one\\\\",two', ["one\\", "two"]],
+            ['_raw,foo,"\\\\",bar,"baz \\\\"', ['_raw', 'foo', '\\', 'bar', 'baz \\']],
+            ['one,"\\\\",two', ["one", "\\", "two"]],
+            ['one,"\\\\","two\\\\three\\\\four"', ["one", "\\", "two\\three\\four"]],
+            ['"one\\\\",two,three,\'four,\'and\',not,"five\'\\\\","\\\\","six\\\\"', ["one\\", "two", "three", "'four", "'and'", "not", "five'\\", "\\", "six\\"]],
 
-        def test_fieldListToString_with_high_bytes(self):
-            l = ['KivimÃ¤ki2', u'KivimÃ¤ki2', 'alsonotunicode', u'should be unicode']
-            expect = u'KivimÃ¤ki2,KivimÃ¤ki2,alsonotunicode,"should be unicode"'
-            found = fieldListToString(l)
-            self.assertEqual(found, expect, "Failure:\n%s expected\n%s found" % (expect, found))
-            self.assertEqual(type(found), type(expect), "Failure:\n%s expected\n%s found" % (type(expect), type(found)))
-                
+            # Test what we give is what we get
+            ['_raw,"first \\\\ ip","\\"weird quoted string\\"","random\\"quote"', ["_raw", "first \ ip", '"weird quoted string"', 'random"quote']]
+        ]
+        for pair in field_list_cases:
+            self.assertEqual(fieldListToString(pair[1]), pair[0])
+        
+    def test_smartTrim(self):
+        
+        s = '1234567890'
+
+        self.assertEqual(smartTrim('', 23), '')
+        self.assertEqual(smartTrim(None, 23), None)
+        self.assertEqual(smartTrim(s, -1), '1234567890')
+        self.assertEqual(smartTrim(s, 0), '1234567890')
+        self.assertEqual(smartTrim(s, 1), '1...')
+        self.assertEqual(smartTrim(s, 2), '1...0')
+        self.assertEqual(smartTrim(s, 3), '1...90')
+        self.assertEqual(smartTrim(s, 4), '12...90')
+        self.assertEqual(smartTrim(s, 5), '12...890')
+        self.assertEqual(smartTrim(s, 6), '123...890')
+        self.assertEqual(smartTrim(s, 7), '123...7890')
+        self.assertEqual(smartTrim(s, 8), '1234...7890')
+        self.assertEqual(smartTrim(s, 9), '1234...67890')
+        self.assertEqual(smartTrim(s, 10), '1234567890')
+        self.assertEqual(smartTrim(s, 11), '1234567890')
+
+    def test_fieldListToString_with_high_bytes(self):
+        l = ['KivimÃ¤ki2', u'KivimÃ¤ki2', 'alsonotunicode', u'should be unicode']
+        expect = u'KivimÃ¤ki2,KivimÃ¤ki2,alsonotunicode,"should be unicode"'
+        found = fieldListToString(l)
+        self.assertEqual(found, expect, "Failure:\n%s expected\n%s found" % (expect, found))
+        self.assertEqual(type(found), type(expect), "Failure:\n%s expected\n%s found" % (type(expect), type(found)))
+
+if __name__ == "__main__":
     # run tests
     suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
     unittest.TextTestRunner(verbosity=2).run(suite)
+

@@ -1,7 +1,7 @@
 from __future__ import print_function
 
 from splunk.clilib import literals
-from lxml import etree
+import splunk.safe_lxml_etree as etree
 import getopt
 import sys
 

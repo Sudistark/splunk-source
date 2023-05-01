@@ -1,9 +1,6 @@
-# standard
 from builtins import object
 import logging
-# contrib
-import lxml.etree as et
-# splunk
+import splunk.safe_lxml_etree as et
 from splunk.models.dashboard import Dashboard
 from splunk.models.legacy_views import panel
 from splunk import rest

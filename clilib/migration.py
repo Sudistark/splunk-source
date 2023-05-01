@@ -37,6 +37,7 @@ EMPTY_LINE     = "\n"
 BACKUP_EXT     = "-migrate.bak"
 
 STANZA_MIG_HISTORY   = 'history'
+STANZA_MIG_SETTINGS  = 'settings'
 
 CONF_COMMANDS        = "commands"
 CONF_SAVEDSEARCHES   = "savedsearches"
@@ -103,7 +104,6 @@ PATH_LOCALMETA_CONF  = make_splunkhome_path(["etc", "system", "metadata", "local
 PATH_WMI_CONF        = bundle_paths.make_path("wmi.conf")
 
 PATH_SEARCH_LOCALMETA_CONF  = make_splunkhome_path(["etc", "apps", "search", "metadata", "local.meta"])
-PATH_SEARCH_SAVSRCH_CONF    = make_splunkhome_path(["etc", "apps", "search", "local", "savedsearches.conf"])
 
 PATH_ETC_USERS              = make_splunkhome_path(["etc", "users"])
 
@@ -228,6 +228,15 @@ def getMigHistory(key):
           val = tuple(map(int, migSettings[STANZA_MIG_HISTORY][key].split(".")))
         else:
           val = migSettings[STANZA_MIG_HISTORY][key]
+  return val
+
+def getMigSettings(key):
+  val = None
+  if os.path.exists(PATH_MIGRATION_CONF):
+    migSettings = comm.readConfFile(PATH_MIGRATION_CONF)
+    if STANZA_MIG_SETTINGS in migSettings:
+      if key in migSettings[STANZA_MIG_SETTINGS]:
+        val = migSettings[STANZA_MIG_SETTINGS][key]
   return val
 
 def askStoppedSplunkd(uri):
@@ -1035,84 +1044,6 @@ def remove_axml_apps_8_0_0(isDryRun):
   # Leaving the user specific app directories at etc/users/*/gettingstarted
   if os.path.exists(path_app_gettingstarted):
     comm.removeItem(path_app_gettingstarted, isDryRun)
-
-def migSavedsearches_4_0_0(src_savedsearch_conf_path, dst_savedsearch_conf_path, local_meta_path, isDryRun):
-        ###
-        # see SPL-20459 - savedsearch.conf migration
-        ###
-        if not os.path.exists( src_savedsearch_conf_path ):
-                return
-
-        if not os.path.exists( os.path.dirname(dst_savedsearch_conf_path) ):
-               os.makedirs ( os.path.dirname(dst_savedsearch_conf_path) )
-
-        inPlace = src_savedsearch_conf_path == dst_savedsearch_conf_path
-
-        old_backup_ext = ".old"
-
-        # make backup of original if not dryrun
-        comm.copyItem( src_savedsearch_conf_path, src_savedsearch_conf_path + old_backup_ext, isDryRun )
-
-        stanzas = comm.readConfFile( src_savedsearch_conf_path )
-        form_search_matcher = re.compile( "\$.*\$" )
-
-        meta_stanza = comm.readConfFile( local_meta_path )
-
-        id2user = comm.id2userMapFromPasswdFile(make_splunkhome_path(['etc', 'passwd']))
-
-        for stanza, settings in stanzas.items():
-
-                if 'search' in settings \
-                        and form_search_matcher.search( settings['search'] ):
-                                settings['disabled'] = '1'
-
-                meta_stanza_key = 'savedsearches/' + urllib_parse.quote(stanza)
-                tmp = { }
-
-                if 'role' in settings:
-                        lowercase_role = settings['role'].lower()
-                        if lowercase_role == "everybody":
-                                lowercase_role = "*"
-                        access_val = 'read : [ ' + lowercase_role  + ' ]'
-                        tmp[ 'access' ] = access_val
-
-                if 'userid' in settings:
-                        if settings['userid'] in id2user:
-                                tmp[ 'owner' ] = id2user[ settings['userid'] ]
-                        else:
-                                new_owner = settings['userid']
-                                if new_owner == "-1":
-                                    new_owner = "nobody"
-                                tmp[ 'owner' ] = new_owner
-                                logger.warn('could not find user in splunk etc/passwd corresponding to id='
-                                        + settings['userid'] 
-                                        + ' from savedsearch: ' 
-                                        + stanza
-                                        + ' ... setting its ownership to "'+new_owner+'"') 
-                tmp['export'] = 'system'
-                if len(tmp) != 0 and not stanza == "default":
-                        meta_stanza[ meta_stanza_key ] = tmp
-
-        if inPlace:
-            comm.writeConfFile(dst_savedsearch_conf_path, stanzas)
-        else:
-             dst_stanzas = comm.readConfFile( dst_savedsearch_conf_path )
-             if not dst_stanzas is None and len(dst_stanzas) > 0:
-                stanzas.update(dst_stanzas)
-             dst_stanzas = stanzas
-
-             comm.writeConfFile(dst_savedsearch_conf_path, dst_stanzas)
-
-             f = open(src_savedsearch_conf_path, 'w')
-             f.write("###############\n")
-             f.write("# contents migrated to: " + str(dst_savedsearch_conf_path) + "\n")
-             f.write("###############\n")
-             f.close()
-
-        # comment out default view states
-        comm.sed( r'(^\s*viewstate.*$)', r'# \1 --commented out for migration-- ', dst_savedsearch_conf_path, inPlace = True )
-
-        comm.writeConfFile(local_meta_path, meta_stanza )
 
 def migTranactionTypes_4_0_0(txn_conf_path, isDryRun):
 
@@ -2418,9 +2349,15 @@ def replaceLocalNavXml_6_0_0(srcPath, dstPath, dryRun):
   SPL-69041. If there is an existing local/data/ui/nav/default.xml in the Search app move
   it to local/data/ui/nav/old_default.xml. This way the default nav xml will be used but
   the users local nav xml will not be destroyed.
+  SPL-195414 give the option to leave the local nav xml in place if preserveLocalNavXml
+  is set to true in migration.conf
   """
   if os.path.exists(srcPath):
-    comm.moveItem(srcPath, dstPath, dryRun)
+    if splunk.util.normalizeBoolean(getMigSettings('preserveLocalNavXml')):
+      if dryRun:
+        logger.info("Would preserve search app local nav xml: %s", srcPath)
+    else:
+      comm.moveItem(srcPath, dstPath, dryRun)
 
 def relocateSplunkwebSSLCerts_4_2_0(webConfPath, isDryRun):
   """
@@ -2979,6 +2916,82 @@ def remove_splunk_instrumentation_search_xml(dryRun):
     # Lets suppress any exceptions so the migration can continue.
     logger.error('Failed to remove %s file: %s' % (xml_path, str(ex)))
 
+def convertToMs(timeStr):
+  if not timeStr:
+    return -1
+  if (timeStr.isnumeric()): #no unit, use second
+    return int(timeStr)*1000
+  unitToMs = {
+    'ms': 1, 'cs': 10, 'ds': 100,
+    's': 1000, 'sec': 1000, 'secs': 1000, 'second': 1000, 'seconds': 1000,
+    'm': 60000, 'min': 60000, 'mins': 60000, 'minute': 60000, 'minutes': 60000,
+    'h': 3600000, 'hr': 3600000, 'hrs': 3600000, 'hour': 3600000, 'hours': 3600000,
+    'd': 86400000, 'day': 86400000, 'days': 86400000,
+    'w': 604800000, 'week': 604800000, 'weeks': 604800000,
+    'mon': 2592000000, 'month': 2592000000, 'months': 2592000000,
+    'q': 7776000000000, 'qtr': 7776000000000, 'qtrs': 7776000000000, 'quarter': 7776000000000, 'quarters': 7776000000000,
+    'y': 31536000000000, 'yr': 31536000000000, 'year': 31536000000000, 'yrs': 31536000000000, 'years': 31536000000000
+  }
+  match = re.search("^(\d+)(\w+)$",timeStr.strip())
+  if not match:
+    return -1
+  num = int(match.group(1))
+  unit = match.group(2)
+  try:
+    return num*unitToMs[unit.lower()]
+  except KeyError:
+    pass
+  return -1
+
+def migrateScriptedAuthCacheTiming(dryRun):
+  """
+  Merge getUsersTTL and getUserInfoTTL to userInfoTTL in authentication.conf.
+  Keep the larger value of the two values, e.g.
+
+      [cacheTiming]           ==>     [cacheTiming]
+      getUsersTTL = 14s               userInfoTTL = 15000ms
+      getUserInfoTTL = 15s
+  """
+  logger.info("\nRunning migration for [cacheTiming] of scripted authentication....\n")
+
+  authenticationConfs = comm.findFiles(make_splunkhome_path(['etc']), '\/authentication.conf$')
+  for conf in authenticationConfs:
+    stanzas = comm.readConfFile(conf)
+    if 'cacheTiming' not in stanzas:
+      continue
+    needWrite = False
+    getUsersTTL_ms = -1
+    getUserInfoTTL_ms = -1
+
+    getUserInfoTTL_str = stanzas['cacheTiming'].pop('getUserInfoTTL', None)
+    if getUserInfoTTL_str:
+      needWrite = True
+      logger.info("removing getUserInfoTTL = " + getUserInfoTTL_str + " from " + conf)
+      getUserInfoTTL_ms = convertToMs(getUserInfoTTL_str)
+
+    getUsersTTL_str = stanzas['cacheTiming'].pop('getUsersTTL', None)
+    if getUsersTTL_str:
+      needWrite = True
+      logger.info("removing getUsersTTL = " + getUsersTTL_str + " from " + conf)
+      getUsersTTL_ms = convertToMs(getUsersTTL_str)
+
+    userInfoTTL_str = stanzas['cacheTiming'].pop('userInfoTTL', None)
+    userInfoTTL_ms = convertToMs(userInfoTTL_str)
+
+    ttl_ms = max(getUserInfoTTL_ms, getUsersTTL_ms, userInfoTTL_ms)
+
+    # if any of the three settings exists, will take the max() of three and write
+    if ttl_ms >= 0 and userInfoTTL_ms != ttl_ms:
+      userInfoTTL_str = str(ttl_ms) + 'ms'
+      needWrite = True
+    # else:
+    #   1) none of the three is found, do nothing, or
+    #   2) userInfoTTL alone is found, no need to change
+
+    if needWrite and not dryRun:
+      logger.info("writing userInfoTTL = " + userInfoTTL_str + " to " + conf)
+      stanzas['cacheTiming']['userInfoTTL'] = userInfoTTL_str
+      comm.writeConfFile(conf, stanzas)
 
 def autoMigrate(logPath, dryRun = False):
   """
@@ -3050,7 +3063,6 @@ def autoMigrate(logPath, dryRun = False):
   
   migWmiConf          = chooseFile(PATH_WMI_CONF,                dryRun, isAfterBundleMove)
   migSearchLocalMeta  = chooseFile(PATH_SEARCH_LOCALMETA_CONF,   dryRun, isAfterBundleMove)
-  migSearchSavedConf  = chooseFile(PATH_SEARCH_SAVSRCH_CONF,     dryRun, isAfterBundleMove)
   
   migFieldActionsConf = chooseFile(PATH_FIELD_ACTIONS, dryRun, isAfterBundleMove)
   migFieldActionsConfNew = chooseFile(PATH_FIELD_ACTIONS_NEW, dryRun, isAfterBundleMove)
@@ -3100,7 +3112,6 @@ def autoMigrate(logPath, dryRun = False):
   migEventTypeTags_4_0_0(migEvttypeConf, migTagsConf, dryRun)
   migSplunkdXml_4_0_0(migSplunkdXml, migSrvConf)
   migSSLConf_4_0_0(migSrvConf)
-  migSavedsearches_4_0_0(migSavedConf, migSearchSavedConf, migSearchLocalMeta, dryRun)
   migAuthConf_4_0_0(migAuthConf)
   migTranactionTypes_4_0_0(migTxnTypesConf, dryRun)
   migSourcetypeAliases_4_0_0(migTagsConf, migPropsConf, dryRun)
@@ -3199,7 +3210,10 @@ def autoMigrate(logPath, dryRun = False):
   remove_exposed_content_8_0_0(dryRun)
   remove_axml_8_0_0(dryRun)
   remove_axml_apps_8_0_0(dryRun)
-  
+
+  # SPL-201034 - merge getUsersTTL and getUserInfoTTL into userInfoTTL
+  migrateScriptedAuthCacheTiming(dryRun)
+
   #
   #
   # finished w/ migration (or dry run).

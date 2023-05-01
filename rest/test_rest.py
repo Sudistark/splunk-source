@@ -4,7 +4,7 @@
 #
 
 import sys
-import lxml.etree as etree
+import splunk.safe_lxml_etree as etree
 import unittest
 import xml.sax.saxutils as su
 import splunk.rest
@@ -128,26 +128,23 @@ class TestPrimitives(unittest.TestCase):
 class TestParser(unittest.TestCase):
 
     def testFeedListUnescaped(self):
-        parsed = srf.parseFeedDocument(testFeeds['list'])
+        parsed = srf.parseFeedDocument(testFeeds['list'].decode())
         self.assertEqual(parsed.toPrimitive()['ENTRY1'], testData['list'])
 
     def testFeedListEscaped(self):
-        parsed = srf.parseFeedDocument(srf.escapeContents(testFeeds['list']), True)
+        parsed = srf.parseFeedDocument(srf.escapeContents(testFeeds['list'].decode()), True)
         self.assertEqual(parsed.toPrimitive()['ENTRY1'], testData['list'])
 
     def testFeedDict(self):
-        parsed = srf.parseFeedDocument(testFeeds['dict'])
+        parsed = srf.parseFeedDocument(testFeeds['dict'].decode())
         self.assertEqual(parsed.toPrimitive()['ENTRY1'], testData['dict'])
 
 
-
-
-if __name__ == '__main__':
-    
+if __name__ == "__main__":
     # exec all tests
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(TestPrimitives))
     suites.append(loader.loadTestsFromTestCase(TestParser))
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
-    
+

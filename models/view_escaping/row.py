@@ -35,65 +35,63 @@ class Row(object):
             return panel.appendPanelElement(panelElement)
         return True
 
+import unittest
 
-if __name__ == '__main__':
+class RowTests(unittest.TestCase):
 
-    import unittest
+    def testRowOnePanelRowOneElement(self):
+        row = Row([1])
+        self.assertEqual(len(row.panels), 1)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 1)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 2)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 3)
 
-    class RowTests(unittest.TestCase):
+    def testRowTwoPanelRow(self):
+        row = Row([2, 1])
+        self.assertEqual(len(row.panels), 2)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 2)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 2)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 2)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 3)
+        #TODOmelting: don't reach in two levels deep.
+        self.assertEqual(len(row.panels[0].panelElements), 2)
+        self.assertEqual(len(row.panels[1].panelElements), 1)
+        self.assertEqual(len(row.panels[2].panelElements), 1)
 
-        def testRowOnePanelRowOneElement(self):
-            row = Row([1])
-            self.assertEqual(len(row.panels), 1)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 1)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 2)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 3)
+    def testRowThreePanelRow(self):
+        row = Row([2, 0, 1])
+        self.assertEqual(len(row.panels), 3)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels[0].panelElements), 1)
+        self.assertEqual(len(row.panels[1].panelElements), 0)
+        self.assertEqual(len(row.panels[2].panelElements), 0)
+        self.assertEqual(len(row.panels), 3)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels[0].panelElements), 2)
+        self.assertEqual(len(row.panels[1].panelElements), 0)
+        self.assertEqual(len(row.panels[2].panelElements), 0)
+        self.assertEqual(len(row.panels), 3)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels[0].panelElements), 2)
+        self.assertEqual(len(row.panels[1].panelElements), 0)
+        self.assertEqual(len(row.panels[2].panelElements), 1)
+        self.assertEqual(len(row.panels), 3)
+        self.assertTrue(row.appendPanelElement({}))
+        self.assertEqual(len(row.panels), 4)
+        #TODOmelting: don't reach in two levels deep.
+        self.assertEqual(len(row.panels[0].panelElements), 2)
+        self.assertEqual(len(row.panels[1].panelElements), 0)
+        self.assertEqual(len(row.panels[2].panelElements), 1)
+        self.assertEqual(len(row.panels[3].panelElements), 1)
 
-        def testRowTwoPanelRow(self):
-            row = Row([2, 1])
-            self.assertEqual(len(row.panels), 2)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 2)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 2)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 2)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 3)
-            #TODOmelting: don't reach in two levels deep.
-            self.assertEqual(len(row.panels[0].panelElements), 2)
-            self.assertEqual(len(row.panels[1].panelElements), 1)
-            self.assertEqual(len(row.panels[2].panelElements), 1)
-
-        def testRowThreePanelRow(self):
-            row = Row([2, 0, 1])
-            self.assertEqual(len(row.panels), 3)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels[0].panelElements), 1)
-            self.assertEqual(len(row.panels[1].panelElements), 0)
-            self.assertEqual(len(row.panels[2].panelElements), 0)
-            self.assertEqual(len(row.panels), 3)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels[0].panelElements), 2)
-            self.assertEqual(len(row.panels[1].panelElements), 0)
-            self.assertEqual(len(row.panels[2].panelElements), 0)
-            self.assertEqual(len(row.panels), 3)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels[0].panelElements), 2)
-            self.assertEqual(len(row.panels[1].panelElements), 0)
-            self.assertEqual(len(row.panels[2].panelElements), 1)
-            self.assertEqual(len(row.panels), 3)
-            self.assertTrue(row.appendPanelElement({}))
-            self.assertEqual(len(row.panels), 4)
-            #TODOmelting: don't reach in two levels deep.
-            self.assertEqual(len(row.panels[0].panelElements), 2)
-            self.assertEqual(len(row.panels[1].panelElements), 0)
-            self.assertEqual(len(row.panels[2].panelElements), 1)
-            self.assertEqual(len(row.panels[3].panelElements), 1)
-
+if __name__ == "__main__":
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(RowTests))

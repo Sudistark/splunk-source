@@ -22,7 +22,12 @@ import splunk.clilib.clilib_tst_artifact as test
 import splunk.clilib.train as train
 import splunk.clilib.i18n as i18n
 
+from splunk.util import pytest_mark_skip_conditional
+
 def newFunc(func):
+  @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+  # this is put here to screen out testDates, testFields, and testStyles
+  # none of these are actual tests, just happen to be named 'test' so pytest picks them up
   def wrapperFunc(args, fromCLI = False):
     if not isinstance(args, dict):
       raise ArgError("Parameter 'args' should be a dict (was %s)." % type(args))

@@ -9,7 +9,7 @@ from splunk import auth, entity, rest, util
 from future.moves.urllib import parse as urllib_parse
 
 import splunk.search   # we cant import it more simply as 'search' because it collides with several 'search' arguments in these functions.
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import logging
 import splunk.util
 logger = logging.getLogger('splunk.saved')
@@ -249,665 +249,664 @@ def savedSearchJSONIsAlert(savedSearchJSON):
 # Test routines        
 # ////////////////////////////////////////////////////////////////////////////
 
-if __name__ == '__main__':
+import unittest
+import time
 
-    import unittest
-    import time
+TEST_NAMESPACE = splunk.getDefault('namespace')
+TEST_OWNER = 'admin'
 
-    TEST_NAMESPACE = splunk.getDefault('namespace')
-    TEST_OWNER = 'admin'
+from splunk.util import pytest_mark_skip_conditional
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class SavedSearchTests(unittest.TestCase):
 
-
-    class SavedSearchTests(unittest.TestCase):
-
-        def assertGreaterThan(self, greaterThan, lessThan):
-            self.assert_(greaterThan > lessThan)
-
-
-        def assertLessThan(self, lessThan, greaterThan):
-            self.assert_(greaterThan > lessThan)
+    def assertGreaterThan(self, greaterThan, lessThan):
+        self.assertTrue(greaterThan > lessThan)
 
 
-        def setupSavedSearchTest(self):
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            label = '12349876 foobar'
-            searchString = 'error sourcetype="something" host="nothing"'
-            # Ensure that saved search 'label' doesn't already exist
-            try:
-                newSavedSearch = createSavedSearch(searchString, label, namespace=splunk.getDefault('namespace'), sessionKey=sessionKey)
-                history = getSavedSearchHistory(label)
-                for job_id in history:
-                    splunk.search.getJob(job_id).cancel()
-            except splunk.RESTException as e:
-                deleteSavedSearch(label, namespace=splunk.getDefault('namespace'))
-                newSavedSearch = createSavedSearch(searchString, label, namespace=splunk.getDefault('namespace'), sessionKey=sessionKey)
-
-            return (sessionKey, label, searchString, newSavedSearch)
+    def assertLessThan(self, lessThan, greaterThan):
+        self.assertTrue(greaterThan > lessThan)
 
 
-        def setupSavedSearchWithNamespaceOwnerTest(self, savedSearchName=None, earliestTime=None, latestTime=None, searchString=None):
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+    def setupSavedSearchTest(self):
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        label = '12349876 foobar'
+        searchString = 'error sourcetype="something" host="nothing"'
+        # Ensure that saved search 'label' doesn't already exist
+        try:
+            newSavedSearch = createSavedSearch(searchString, label, namespace=splunk.getDefault('namespace'), sessionKey=sessionKey)
+            history = getSavedSearchHistory(label)
+            for job_id in history:
+                splunk.search.getJob(job_id).cancel()
+        except splunk.RESTException as e:
+            deleteSavedSearch(label, namespace=splunk.getDefault('namespace'))
+            newSavedSearch = createSavedSearch(searchString, label, namespace=splunk.getDefault('namespace'), sessionKey=sessionKey)
 
-            time.sleep(1)
+        return (sessionKey, label, searchString, newSavedSearch)
 
-            label = u'%s %s foobar'
-            if savedSearchName == None or not isinstance(savedSearchName, splunk.util.string_type):
-                label = label % (TEST_NAMESPACE, TEST_OWNER)
-            else:
-                label = savedSearchName
 
-            searchString = searchString or 'error sourcetype="something" host="nothing"'
+    def setupSavedSearchWithNamespaceOwnerTest(self, savedSearchName=None, earliestTime=None, latestTime=None, searchString=None):
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            def gen_savedSearch():
-                return createSavedSearch(searchString, label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sessionKey=sessionKey, earliestTime=earliestTime, latestTime=latestTime)
+        time.sleep(1)
 
-            # Ensure that saved search 'label' doesn't already exist
-            try:
-                newSavedSearch = gen_savedSearch()
-                history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-                for job_id in history:
-                    splunk.search.getJob(job_id).cancel()
-            except splunk.RESTException as e:
-                deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-                newSavedSearch = gen_savedSearch()
+        label = u'%s %s foobar'
+        if savedSearchName == None or not isinstance(savedSearchName, splunk.util.string_type):
+            label = label % (TEST_NAMESPACE, TEST_OWNER)
+        else:
+            label = savedSearchName
 
-            return (sessionKey, label, searchString, newSavedSearch)
+        searchString = searchString or 'error sourcetype="something" host="nothing"'
 
-        
-        def XXtestSavedSearchHistoryIgnoreRunning(self):
-            '''
-            TODO:
+        def gen_savedSearch():
+            return createSavedSearch(searchString, label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sessionKey=sessionKey, earliestTime=earliestTime, latestTime=latestTime)
 
-            Disabling because test fails constantly in test automation.  Proper
-            solution is to write search command to prop open a running search
-            for a specified period.
-            
-            Tests ignoreRunning option of the getSavedSearchHistory method.
-            '''
-            search_str = 'search index=_*'
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(
-                searchString=search_str
-            )
-            
-            # Dispatch a long running search
-            job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            job.pause()
-
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=True)
-            self.assertEquals(len(history), 0, 'failed to have 0 jobs when ignoreRunning=true for savedsearch=%s; assumed that job is long-running' % label)
-        
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
-            self.assert_(len(history) > 0, 'failed to find any running search jobs for savedsearch=%s' % label)
-        
-            job.cancel()
+        # Ensure that saved search 'label' doesn't already exist
+        try:
+            newSavedSearch = gen_savedSearch()
+            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+            for job_id in history:
+                splunk.search.getJob(job_id).cancel()
+        except splunk.RESTException as e:
             deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+            newSavedSearch = gen_savedSearch()
+
+        return (sessionKey, label, searchString, newSavedSearch)
+
+    
+    def XXtestSavedSearchHistoryIgnoreRunning(self):
+        '''
+        TODO:
+
+        Disabling because test fails constantly in test automation.  Proper
+        solution is to write search command to prop open a running search
+        for a specified period.
         
-        def testsavedSearchJSONIsAlert(self):
-            savedSearchJSON = {
-                'entry': [
-                    {
-                        'content': {                
-                            'is_scheduled': '0',
-                            'alert_type': 'always',
-                            'alert.track': '0',
-                            'actions': '',
-                            'dispatch.earliest_time': '',
-                            'dispatch.latest_time': ''
-                        }
+        Tests ignoreRunning option of the getSavedSearchHistory method.
+        '''
+        search_str = 'search index=_*'
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(
+            searchString=search_str
+        )
+        
+        # Dispatch a long running search
+        job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        job.pause()
+
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=True)
+        self.assertEqual(len(history), 0, 'failed to have 0 jobs when ignoreRunning=true for savedsearch=%s; assumed that job is long-running' % label)
+    
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
+        self.assertTrue(len(history) > 0, 'failed to find any running search jobs for savedsearch=%s' % label)
+    
+        job.cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    def testsavedSearchJSONIsAlert(self):
+        savedSearchJSON = {
+            'entry': [
+                {
+                    'content': {                
+                        'is_scheduled': '0',
+                        'alert_type': 'always',
+                        'alert.track': '0',
+                        'actions': '',
+                        'dispatch.earliest_time': '',
+                        'dispatch.latest_time': ''
                     }
-                ]
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '0',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(not savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'always',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '0',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': '',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': 'rt',
-                'dispatch.latest_time': ''
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
-            savedSearchJSON['entry'][0]['content']={
-                'is_scheduled': '1',
-                'alert_type': 'foo',
-                'alert.track': '1',
-                'actions': 'email',
-                'dispatch.earliest_time': '',
-                'dispatch.latest_time': 'rt'
-            }
-            self.assert_(savedSearchJSONIsAlert(savedSearchJSON))
+                }
+            ]
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '0',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(not savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'always',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '0',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': '',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': 'rt',
+            'dispatch.latest_time': ''
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
+        savedSearchJSON['entry'][0]['content']={
+            'is_scheduled': '1',
+            'alert_type': 'foo',
+            'alert.track': '1',
+            'actions': 'email',
+            'dispatch.earliest_time': '',
+            'dispatch.latest_time': 'rt'
+        }
+        self.assertTrue(savedSearchJSONIsAlert(savedSearchJSON))
 
-        def testSavedSearchHistorySorting(self):
-            '''Tests sorting of the saved search history endpoint results.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            
-            for i in range(5):
-                dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-                time.sleep(1)
+    def testSavedSearchHistorySorting(self):
+        '''Tests sorting of the saved search history endpoint results.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
         
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sortKey='createTime')
-            items = list(history.items())
-        
-            # Default sort is 'desc'
-            self.assertGreaterThan(items[0][1].createTime, items[2][1].createTime)
-        
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sortKey='createTime', sortDir='asc')
-            items = list(history.items())
-        
-            self.assertLessThan(items[0][1].createTime, items[2][1].createTime)
-        
-            for key, val in items:
-                splunk.search.getJob(key).cancel()
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testGeneralSavedSearchMethodsWithHighByteCharacters(self):
-            '''Tests saved search methods with high byte characters.'''
-        
-            name = splunk.util.unicode('"ABCDEFGHIJKLMNOPQRSTUVWXYZ "Å" Ä Ö (å ä ö)')
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(savedSearchName=name)
-        
-            # Did it create the saved search?
-            self.assert_(isinstance(newSavedSearch, entity.Entity))
-        
-            # Can it dispatch jobs?
-            job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(isinstance(job, splunk.search.SearchJob))
-            job.save()
-        
-            # Is there a valid history?
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(len(history) > 0)
-        
-            # Get the most recent job?
-            last_job = getJobForSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
-            self.assertEquals(last_job.sid, job.sid)
-        
-            job.cancel()
-            # Delete the saved search?
-            self.assert_(deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER))
-        
-        
-        def testGetSavedSearchHistoryObeysIgnoreExpired(self):
-            '''Test that ignore expired correctly filters old results.'''
-
-            name = 'testSavedSearchHistory'
-            namespace = TEST_NAMESPACE
-            owner = TEST_OWNER
-        
-            sessionKey, label, searchString, newSavedSearch = \
-                self.setupSavedSearchWithNamespaceOwnerTest(savedSearchName=name)
-        
-            # there is a thread that checks for expired jobs. 
-            # but it only checks every 10 seconds. 
-            # and there's some additional delta that can make even a X+10 sleep not long enough
-            # so here i just wait for X+20 seconds.   Only way i can get the test to pass 
-            # 100% of the time.
-            testTTL = 2
-            jobExpirationPollingInterval = 10
-            job = dispatchSavedSearch(label, ttl=testTTL, namespace=namespace, owner=owner)
-        
-            self.assert_(job.ttl <= testTTL, 
-                'Job TTL does not validate: actual=%s expected=%s' % (job.ttl, testTTL))
-        
-            # Job should be there at first
-            fresh = getSavedSearchHistory(name, namespace=namespace, owner=owner)
-            self.assert_(job.sid in fresh)
-        
-            # we wait for the TTL, plus twice whatever the period is of the job reaping thread.
-            time.sleep(testTTL + 2*jobExpirationPollingInterval)
-        
-            # the TTL will have expired and then the reaping thread will have run at least once. 
-            # thus the job should be expired.
-            fresh = getSavedSearchHistory(name, namespace=namespace, owner=owner)
-            self.assert_(job.sid not in fresh)
-        
-            # Clean up
-            try:
-                job.cancel()
-            except splunk.ResourceNotFound:
-                # splunkd might have already cleaned this up, since it has expired.
-                pass
-
-            deleteSavedSearch(name, namespace=namespace, owner=owner)
-        
-        
-        def testCreateSavedSearchIncludesTimeArgs(self):
-            '''Assert that including an earlist / latest time includes them in the saved search object.'''
-            e = '-3d'
-            l = '-1d'
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(earliestTime=e, latestTime=l)
-            savedSearch = getSavedSearch(label)
-            self.assert_(savedSearch['dispatch.earliest_time'] == e)
-            self.assert_(savedSearch['dispatch.latest_time'] == l)
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testCreateSavedSearchWOTimeArgs(self):
-            '''Assert that not providing the earliest / latest times does not define a default earliest / latest time.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            savedSearch = getSavedSearch(label)
-            
-            # At some point splunkd used to set default dispatch.latest_time to 'now'. 
-            # at alater point there was a comment here saying that it started defaulting 
-            # to not setting anything, including a dispatch.latest_time key.
-            # and at the current time, it appears to set the value to a literal None value.
-
-            #FAILS.
-            #self.assertRaises(KeyError, savedSearch.__getitem__, 'dispatch.earliest_time')
-            #self.assertRaises(KeyError, savedSearch.__getitem__, 'dispatch.latest_time')
-            #PASSES.  cause it now returns none. 
-            self.assert_(savedSearch['dispatch.earliest_time'] == None)
-            
-
-            
-            
-            self.assert_(savedSearch['dispatch.latest_time'] == None)
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testCreateSavedSearch(self):
-            '''Test creating a saved search with/without namespace/owner.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            self.assert_(isinstance(newSavedSearch, entity.Entity))
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testDispatchSavedSearch(self):
-            '''Test dispatching a saved search with/without namespace/owner.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(isinstance(job, splunk.search.SearchJob))
-            job.cancel()
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testListSavedSearches(self):
-            '''Test listing saved searches with/without namespace/owner.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            ss = listSavedSearches(namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(label in ss)
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testListSavedSearchHistory(self):
-            '''Test lists saved search history with/without namespace/owner.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            self.assertEquals(len(getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)), 0)
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testDeleteSavedSearch(self):
-            '''Test deleting a saved search with/without namespace/owner.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            self.assert_(deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER))
-        
-        
-        def testFindLastRunSavedSearchUseHistoryAuto(self):
-            '''Test returns a search job given a saved search name, or creates a new job if there is none in the history.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(len(history), 0)
-        
-            job_no = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(isinstance(job_no, splunk.search.SearchJob))
-        
-            # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
-            job2_no = getJobForSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
-            self.assertEquals(job_no.sid, job2_no.sid)
-        
-            job2_no.cancel() # should clean up both
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testFindLastRunSavedSearchUseHistoryYes(self):
-            '''Test returns a search job only from the search history given a saved search name.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(len(history), 0)
-        
-            # Test that a new job is created when saved search
-            job = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(job, None)
-        
-            # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
-            job2 = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            job2_clone = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
-            self.assertEquals(job2.sid, job2_clone.sid)
-        
-            job2.cancel()
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-        
-        
-        def testFindLastRunSavedSearchUseHistoryNo(self):
-            '''Test returns a new search job given a saved search name with use_history=False.'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(len(history), 0)
-        
-            # Test that a new job is created when saved search
-            job = getJobForSavedSearch(label, useHistory=False, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assert_(isinstance(job, splunk.search.SearchJob))
-        
+        for i in range(5):
+            dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
             time.sleep(1)
-        
-            # Test that calling getJobForSavedSearch does not return the same sid as 'job'
-            job2 = getJobForSavedSearch(label, useHistory=False, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertNotEquals(job.sid, job2.sid)
-        
+    
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sortKey='createTime')
+        items = list(history.items())
+    
+        # Default sort is 'desc'
+        self.assertGreaterThan(items[0][1].createTime, items[2][1].createTime)
+    
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, sortKey='createTime', sortDir='asc')
+        items = list(history.items())
+    
+        self.assertLessThan(items[0][1].createTime, items[2][1].createTime)
+    
+        for key, val in items:
+            splunk.search.getJob(key).cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testGeneralSavedSearchMethodsWithHighByteCharacters(self):
+        '''Tests saved search methods with high byte characters.'''
+    
+        name = splunk.util.unicode('"ABCDEFGHIJKLMNOPQRSTUVWXYZ "Å" Ä Ö (å ä ö)')
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(savedSearchName=name)
+    
+        # Did it create the saved search?
+        self.assertTrue(isinstance(newSavedSearch, entity.Entity))
+    
+        # Can it dispatch jobs?
+        job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(isinstance(job, splunk.search.SearchJob))
+        job.save()
+    
+        # Is there a valid history?
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(len(history) > 0)
+    
+        # Get the most recent job?
+        last_job = getJobForSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
+        self.assertEqual(last_job.sid, job.sid)
+    
+        job.cancel()
+        # Delete the saved search?
+        self.assertTrue(deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER))
+    
+    
+    def testGetSavedSearchHistoryObeysIgnoreExpired(self):
+        '''Test that ignore expired correctly filters old results.'''
+
+        name = 'testSavedSearchHistory'
+        namespace = TEST_NAMESPACE
+        owner = TEST_OWNER
+    
+        sessionKey, label, searchString, newSavedSearch = \
+            self.setupSavedSearchWithNamespaceOwnerTest(savedSearchName=name)
+    
+        # there is a thread that checks for expired jobs. 
+        # but it only checks every 10 seconds. 
+        # and there's some additional delta that can make even a X+10 sleep not long enough
+        # so here i just wait for X+20 seconds.   Only way i can get the test to pass 
+        # 100% of the time.
+        testTTL = 2
+        jobExpirationPollingInterval = 10
+        job = dispatchSavedSearch(label, ttl=testTTL, namespace=namespace, owner=owner)
+    
+        self.assertTrue(job.ttl <= testTTL, 
+            'Job TTL does not validate: actual=%s expected=%s' % (job.ttl, testTTL))
+    
+        # Job should be there at first
+        fresh = getSavedSearchHistory(name, namespace=namespace, owner=owner)
+        self.assertTrue(job.sid in fresh)
+    
+        # we wait for the TTL, plus twice whatever the period is of the job reaping thread.
+        time.sleep(testTTL + 2*jobExpirationPollingInterval)
+    
+        # the TTL will have expired and then the reaping thread will have run at least once. 
+        # thus the job should be expired.
+        fresh = getSavedSearchHistory(name, namespace=namespace, owner=owner)
+        self.assertTrue(job.sid not in fresh)
+    
+        # Clean up
+        try:
             job.cancel()
-            job2.cancel()
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        except splunk.ResourceNotFound:
+            # splunkd might have already cleaned this up, since it has expired.
+            pass
+
+        deleteSavedSearch(name, namespace=namespace, owner=owner)
+    
+    
+    def testCreateSavedSearchIncludesTimeArgs(self):
+        '''Assert that including an earlist / latest time includes them in the saved search object.'''
+        e = '-3d'
+        l = '-1d'
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest(earliestTime=e, latestTime=l)
+        savedSearch = getSavedSearch(label)
+        self.assertTrue(savedSearch['dispatch.earliest_time'] == e)
+        self.assertTrue(savedSearch['dispatch.latest_time'] == l)
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testCreateSavedSearchWOTimeArgs(self):
+        '''Assert that not providing the earliest / latest times does not define a default earliest / latest time.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        savedSearch = getSavedSearch(label)
+        
+        # At some point splunkd used to set default dispatch.latest_time to 'now'. 
+        # at alater point there was a comment here saying that it started defaulting 
+        # to not setting anything, including a dispatch.latest_time key.
+        # and at the current time, it appears to set the value to a literal None value.
+
+        #FAILS.
+        #self.assertRaises(KeyError, savedSearch.__getitem__, 'dispatch.earliest_time')
+        #self.assertRaises(KeyError, savedSearch.__getitem__, 'dispatch.latest_time')
+        #PASSES.  cause it now returns none. 
+        self.assertTrue(savedSearch['dispatch.earliest_time'] == None)
+        
+
+        
+        
+        self.assertTrue(savedSearch['dispatch.latest_time'] == None)
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testCreateSavedSearch(self):
+        '''Test creating a saved search with/without namespace/owner.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        self.assertTrue(isinstance(newSavedSearch, entity.Entity))
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testDispatchSavedSearch(self):
+        '''Test dispatching a saved search with/without namespace/owner.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        job = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(isinstance(job, splunk.search.SearchJob))
+        job.cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testListSavedSearches(self):
+        '''Test listing saved searches with/without namespace/owner.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        ss = listSavedSearches(namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(label in ss)
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testListSavedSearchHistory(self):
+        '''Test lists saved search history with/without namespace/owner.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        self.assertEqual(len(getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)), 0)
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testDeleteSavedSearch(self):
+        '''Test deleting a saved search with/without namespace/owner.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        self.assertTrue(deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER))
+    
+    
+    def testFindLastRunSavedSearchUseHistoryAuto(self):
+        '''Test returns a search job given a saved search name, or creates a new job if there is none in the history.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(len(history), 0)
+    
+        job_no = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(isinstance(job_no, splunk.search.SearchJob))
+    
+        # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
+        job2_no = getJobForSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
+        self.assertEqual(job_no.sid, job2_no.sid)
+    
+        job2_no.cancel() # should clean up both
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testFindLastRunSavedSearchUseHistoryYes(self):
+        '''Test returns a search job only from the search history given a saved search name.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(len(history), 0)
+    
+        # Test that a new job is created when saved search
+        job = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(job, None)
+    
+        # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
+        job2 = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        job2_clone = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
+        self.assertEqual(job2.sid, job2_clone.sid)
+    
+        job2.cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+    
+    
+    def testFindLastRunSavedSearchUseHistoryNo(self):
+        '''Test returns a new search job given a saved search name with use_history=False.'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(len(history), 0)
+    
+        # Test that a new job is created when saved search
+        job = getJobForSavedSearch(label, useHistory=False, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertTrue(isinstance(job, splunk.search.SearchJob))
+    
+        time.sleep(1)
+    
+        # Test that calling getJobForSavedSearch does not return the same sid as 'job'
+        job2 = getJobForSavedSearch(label, useHistory=False, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertNotEqual(job.sid, job2.sid)
+    
+        job.cancel()
+        job2.cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
 
 
-        def testAAGetSavedSearchFromSID(self):
-            '''Verify getSavedSearchFromSID()'''
-            sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
-            history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(len(history), 0)
+    def testAAGetSavedSearchFromSID(self):
+        '''Verify getSavedSearchFromSID()'''
+        sessionKey, label, searchString, newSavedSearch = self.setupSavedSearchWithNamespaceOwnerTest()
+        history = getSavedSearchHistory(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(len(history), 0)
 
-            # Test that a new job is created when saved search
-            job = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            self.assertEquals(job, None)
+        # Test that a new job is created when saved search
+        job = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        self.assertEqual(job, None)
 
-            # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
-            job2 = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            job2_clone = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
-            self.assertEquals(job2.sid, job2_clone.sid)
-            
-            # check that lookup via SID works
-            challengeSavedSearch = getSavedSearchFromSID(job2.id, sessionKey=sessionKey)
-            self.assert_(isinstance(challengeSavedSearch, entity.Entity), 'check that entity.Entity object returned; got %s' % type(challengeSavedSearch))
-            self.assertEquals(challengeSavedSearch.name, label, 'check that saved search name matches')
-            self.assertEquals(challengeSavedSearch['search'], newSavedSearch['search'], 'check that saved search string matches')
+        # Test that calling findLastJobFromSavedSearch returns the same sid as 'job'
+        job2 = dispatchSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        job2_clone = getJobForSavedSearch(label, useHistory=True, namespace=TEST_NAMESPACE, owner=TEST_OWNER, ignoreRunning=False)
+        self.assertEqual(job2.sid, job2_clone.sid)
+        
+        # check that lookup via SID works
+        challengeSavedSearch = getSavedSearchFromSID(job2.id, sessionKey=sessionKey)
+        self.assertTrue(isinstance(challengeSavedSearch, entity.Entity), 'check that entity.Entity object returned; got %s' % type(challengeSavedSearch))
+        self.assertEqual(challengeSavedSearch.name, label, 'check that saved search name matches')
+        self.assertEqual(challengeSavedSearch['search'], newSavedSearch['search'], 'check that saved search string matches')
 
-            job2.cancel()
-            deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-
-
+        job2.cancel()
+        deleteSavedSearch(label, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
 
 
+if __name__ == "__main__":
     # exec all tests
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(SavedSearchTests))
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
+

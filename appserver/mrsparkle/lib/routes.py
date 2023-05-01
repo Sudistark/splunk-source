@@ -44,7 +44,7 @@ from functools import total_ordering
 from builtins import object
 
 import cherrypy
-from cherrypy._cpdispatch import test_callable_spec
+from cherrypy._cpdispatch import test_callable_spec as tcs
 import sys
 import inspect
 import logging
@@ -80,7 +80,7 @@ def route(route=None, methods=None, leave_exposed=False):
     def decorator(fn):
         if not hasattr(fn, 'routes'):
             fn.routes = []
-        fnargs = inspect.getargspec(fn)
+        fnargs = inspect.getfullargspec(fn)
         if fnargs[3]:
             defaults = dict( zip(fnargs[0][0-len(fnargs[3]):], fnargs[3]) )
         else:
@@ -382,7 +382,7 @@ class RoutableType(type):
                             cherrypy.session.escalate_lock()
                         return route.target(self, **kw)
                     except TypeError as x:
-                        test_callable_spec(route.target, [], kw)
+                        tcs(route.target, [], kw)
                         raise
                     except RequestRefused as e:
                         pass
@@ -391,7 +391,7 @@ class RoutableType(type):
                     try:
                         return default.original(*path, **kw)
                     except TypeError as x:
-                        test_callable_spec(default.original, path, kw)
+                        tcs(default.original, path, kw)
                         raise
                 if e:
                     raise # re-raise the last exception
@@ -402,4 +402,3 @@ class RoutableType(type):
                 default.original = dict_obj['default']
             dict_obj['default'] = default
         return super(RoutableType, m).__new__(m, clsname, bases, dict_obj)
-

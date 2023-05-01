@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import xml.sax.saxutils as su
 
 import splunk.models.legacy_views.base as base

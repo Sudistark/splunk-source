@@ -3,7 +3,7 @@ from __future__ import print_function
 from builtins import object
 
 from future.moves.urllib.parse import urlencode
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import datetime
 import time
 import socket

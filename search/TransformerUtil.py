@@ -32,10 +32,10 @@ def tokenize(searchString):
 
     Please note this is not really in any way a tokenizer.  
     It actually returns, not tokens, but search phrases or clauses. --jrod
-    >>> tokenize("hi i like beans NOT (frijoles_negros OR garbanzos)"
-    ["hi", "i", "like", "beans", "NOT (frijoles_negros OR garbanzos)"]
+    >>> tokenize("hi i like beans NOT (frijoles_negros OR garbanzos)")
+    ['hi', 'i', 'like', 'beans', 'NOT (frijoles_negros OR garbanzos)']
     >>> tokenize("val1 > 5 val2>6")
-    ["val1", ">", "5", "val2>6"]
+    ['val1', '>', '5', 'val2>6']
     """
     if not searchString:
         return []
@@ -467,7 +467,7 @@ def _equalKVStringTerms(term1, term2):
 def _hasStringTerm(clause, term):
     """ given term is of form "type" or "key=value" """
     tokens = tokenize( clause.args['search'] )
-    if isinstance(term, str) or isinstance(term, unicode):
+    if isinstance(term, str) or isinstance(term, util.unicode):
         for token in tokens:
             if '=' in token and '=' in term and not (token.startswith("(") and token.endswith(")") ):
                 if _equalKVStringTerms(token, term): return True
@@ -672,190 +672,4 @@ def findSearchClauseWithTerm(parsed=None, args=None):
 
 
 ###########################################################
-### Unit tests
-
-if __name__ == "__main__":
-    import unittest
-    import splunk.auth
-    from splunk.search import Parser
-
-    class TestTransformUtil(unittest.TestCase):
-        _sessionKey = splunk.auth.getSessionKey('admin', 'changeme')
-        _hostPath   = splunk.mergeHostPath()
-
-        def testHasTerms(self):
-            """ Are terms found correctly in search strings? """
-
-            searchString = 'search userid=6 username="nick" owner=ivan login'
-            ps = Parser.parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-
-            sc = getClauseWithCommand(ps, "search")
-
-            self.assert_( hasTerm(sc, "login") )
-            self.assert_( hasTerm(sc, {"username":"nick"}) )
-            self.assert_( hasTerm(sc, {"userid":6}) )
-
-            self.assert_( hasTerm(sc, 'username="nick"') )
-            self.assert_( hasTerm(sc, 'username=nick') )
-            self.assert_( hasTerm(sc, 'owner="ivan"') )
-            self.assert_( hasTerm(sc, 'owner=ivan') )
-            self.assert_( hasTerm(sc, "userid=6") )
-
-            self.assert_( not hasTerm(sc, "shouldNotBeHere") )
-            self.assert_( not hasTerm(sc, {"username":"ivan"}) )
-            self.assert_( not hasTerm(sc, {"userid":7}) )
-
-        def testRemoveTerms(self):
-            """ Are search terms correctly removed from search strings? """
-
-            searchString = 'search loglevel=7 userid=6 username="nick" owner=ivan target="mars" destination=home login'
-            ps = Parser.parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-
-            sc = getClauseWithCommand(ps, "search")
-
-            removeTerm(sc, "login")
-            self.assert_(sc.serialize().find("login") == -1 )
-
-            removeTerm(sc, {"username" : "nick"} )
-            self.assert_(sc.serialize().find('username="nick"') == -1 )
-
-            removeTerm(sc, {"owner" : "ivan"} )
-            self.assert_(sc.serialize().find('owner=ivan') == -1 )
-
-            removeTerm(sc, {"userid" : 6} )
-            self.assert_(sc.serialize().find('userid=6') == -1 )
-
-            removeTerm(sc, 'target=mars' )
-            removeTerm(sc, 'destination="home"' )
-
-            removeTerm(sc, "loglevel=7")
-            self.assert_(sc.serialize().find('loglevel=7') == -1 )
-
-            # ELVIS print(sc.serialize())
-            self.assert_( sc.serialize() == 'search *' )
-
-
-            # SPL-32258
-            searchString = 'search index=_internal sourcetype=splunkd OR sourcetype=searches'
-            ps = Parser.parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-            sc = getClauseWithCommand(ps, "search")
-
-            removeTerm(sc, {'sourcetype': 'searches'})
-            self.assert_(sc, 'index="_internal" sourcetype="splunkd"')
-            
-            searchString = 'search index=_internal sourcetype=splunkd OR sourcetype=searches'
-            ps = Parser.parseSearch(searchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-            sc = getClauseWithCommand(ps, "search")
-
-            removeTerm(sc, {'sourcetype': 'splunkd'})
-            self.assert_(sc, 'index="_internal" sourcetype="searches"')
-
-        def testRemoveTermsEscaped(self):
-            '''
-            Verify remove term behavior when presented with terms that contain
-            escape character
-            '''
-
-            beforeSearchString = r'search this \\that foo'
-            parser = Parser.parseSearch(beforeSearchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-            searchClause = getClauseWithCommand(parser, 'search')
-            removeTerm(searchClause, r'\\that')
-            self.assertEquals(searchClause.serialize(), 'search this foo')
-
-            beforeSearchString = r'search this \that foo'
-            parser = Parser.parseSearch(beforeSearchString, hostPath=self._hostPath, sessionKey=self._sessionKey)
-            searchClause = getClauseWithCommand(parser, 'search')
-            removeTerm(searchClause, r'\that')
-            self.assertEquals(searchClause.serialize(), 'search this foo')
-
-
-
-        def testTokenize(self):
-            """ Are search strings correctly tokenized? """
-
-            tokenTests = [
-                ( 'johnsmith',              ['johnsmith'] ),
-                ( 'john smith',             ['john', 'smith'] ),
-                ( 'x="y z"',                ['x="y z"'] ),
-                ( 'user=Main.JohnSmith',    ['user=Main.JohnSmith'] ),
-                ( 'superman "Lex Luther"',  ['superman', '"Lex Luther"'] ),
-                ( 'sourcetype=bar',         ['sourcetype=bar'] ),
-                ( 'sourcetype::bar',        ['sourcetype=bar'] ),
-                ( '( sourcetype=bar )',        ['sourcetype=bar'] ),
-                ( 'source="/var/log/*"',    ['source="/var/log/*"'] ),
-                ( 'x=p',                    ['x=p'] ),
-                ( 'x="p"',                  ['x="p"'] ),
-                ( 'NOT x',                    ['NOT x'] ),
-                ( 'x NOT y',                    ['x', 'NOT y'] ),
-                ( 'x NOT y z',                    ['x', 'NOT y', 'z'] ),
-                ( '(toBe OR notToBe) question',    ['(toBe OR notToBe)', 'question'] ),
-                ( 'toBe OR notToBe) question',     ['toBe', 'OR', 'notToBe)', 'question'] ),
-                ( 'toBe OR notToBe) ) question',   ['toBe', 'OR', 'notToBe)', ')', 'question'] ),
-                ( 'toBe OR notToBe)) question',    ['toBe', 'OR', 'notToBe))', 'question'] ),
-                ( '((toBe OR notToBe)) question',  ['((toBe OR notToBe))', 'question'] ),
-                ( '((toBe OR notToBe question',    ['((toBe OR notToBe question'] ),
-                ( '(toBe OR (notToBe)) question',  ['(toBe OR (notToBe))', 'question'] ),
-                ( '(toBe (OR (not)ToBe)) question', ['(toBe (OR (not)ToBe))', 'question'] ),
-                ( 'error OR failed OR severe OR ( sourcetype=access_* ( 404 OR 500 OR 503 ) ) starthoursago::24',\
-                    ['error', 'OR', 'failed', 'OR', 'severe', 'OR', '( sourcetype=access_* ( 404 OR 500 OR 503 ) )', 'starthoursago::24']),
-                ( 'error OR failed OR severe OR ( sourcetype="access_*" ( 404 OR 500 OR 503 ) ) starthoursago::24',\
-                    ['error', 'OR', 'failed', 'OR', 'severe', 'OR', '( sourcetype="access_*" ( 404 OR 500 OR 503 ) )', 'starthoursago::24']),
-                ('search foo [search bar | top host | format]', ['search', 'foo', '[search bar | top host | format]']),
-                ('search foo [search bar [search wunderbar] | top host | format]', ['search', 'foo', '[search bar [search wunderbar] | top host | format]']),
-                ('search "["', ['search', '"["']),
-                ('search "]"', ['search', '"]"']),
-                ('search "[[]"', ['search', '"[[]"']),
-                ('search "("', ['search', '"("']),
-                ('search "(["', ['search', '"(["']),
-                ('search "]"', ['search', '"]"']),
-
-                ('search this [search "]"]', ['search', 'this', '[search "]"]']),
-                ('search this (that OR ")")', ['search', 'this', '(that OR ")")']),
-            ]
-
-            for test in tokenTests:
-                self.assertEquals( tokenize(test[0]), test[1] )
-
-        def testStringToKV(self):
-            """ Are terms correctly tokenized in KV pairs? """
-
-            self.assertEquals(stringToSearchKV( "index=_audit login" ), {"index":"_audit", "search":"login"} )
-
-        def testEqualStringTerms(self):
-            """ Are quotes in kv pairs ignored? """
-
-            self.assert_( _equalKVStringTerms('hello=world', 'hello=world') )
-            self.assert_( _equalKVStringTerms('hello=world', 'hello="world"') )
-            self.assert_( _equalKVStringTerms("hello='world'", 'hello="world"') )
-            self.assert_( _equalKVStringTerms("hello='world'", 'hello=world') )
-
-            self.assertFalse( _equalKVStringTerms("hello='world'", 'hello=wxrld') )
-
-        def testKToString(self):
-            """ Are K fields correctly quoted when needed? """
-
-            self.assertEquals(searchKToString("johnsmith" ), 'johnsmith' )
-            self.assertEquals(searchKToString("john smith" ), '"john smith"' )
-            self.assertEquals(searchKToString('boo'), 'boo' )
-
-        def testKVToString(self):
-            """ Are KV pairs correctly merged into search string terms? """
-
-            self.assertEquals(searchVToString("johnsmith" ), '"johnsmith"' )
-            self.assertEquals(searchVToString("john smith" ), '"john smith"' )
-            self.assertEquals(searchVToString( 26 ), '26' )
-            self.assertEquals(searchVToString( '26' ), '"26"' )
-            self.assertEquals(searchVToString('"6"'), '"6"' )
-            self.assertEquals(searchVToString('"boo"'), '"boo"' )
-            self.assertEquals(searchVToString('boo'), '"boo"' )
-            
-        def testUnfilter(self):
-            """ Are the search terms correctly parsed out of search filter wrappers? """
-
-            self.assertEquals( unfilterize( "( index=_audit login ) ( ( * ) )" ), "index=_audit login")
-            self.assertEquals( unfilterize( "  ( index=_audit login ) ( ( * ) )" ), "index=_audit login")
-            self.assertEquals( unfilterize( "  ( index=_audit login ) ( ( * ) )  " ), "index=_audit login")
-
-    # Execute test suite.
-    transformSuite = unittest.TestLoader().loadTestsFromTestCase(TestTransformUtil)
-    unittest.TextTestRunner(verbosity=3).run(transformSuite)
+### Moved Unit tests to Parser.py due to cyclic dependency

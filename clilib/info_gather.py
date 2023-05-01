@@ -137,6 +137,7 @@ import shutil
 import tarfile
 import stat
 import logging
+import locale
 import splunk.clilib.cli_common
 try:
     import splunk.clilib.log_handlers
@@ -153,6 +154,7 @@ import traceback
 if sys.version_info >= (3, 0):
     from io import StringIO
     from io import BytesIO
+    from shlex import quote
 else: # py2 has io.StringIO but it behaves differently, we want the classic version:
     from StringIO import StringIO
 import tempfile
@@ -196,7 +198,11 @@ KNOWN_COMPONENTS = ("index_files",
                     "rest",
                     "kvstore",
                     "file_validate",
+                    "profiler" # cloud_profiler
                    )
+
+DEFAULT_LOCALE = ('en_US', 'UTF-8')
+DEFAULT_LOCALE_WARNING = 'Cannot load locale. Is the LANG environment variable set? Defaulting to {}.{}'.format(DEFAULT_LOCALE[0], DEFAULT_LOCALE[1])
 
 system_info = None # systeminfo.txt file obj; if you want to use reporting
                    # functions externally, set this as desired.
@@ -1325,8 +1331,12 @@ def get_process_listing_windows():
            'IMAGENAME eq splunkd.exe', # for splunkd.exe procesess
     ]
     lines.append("running: %s" % " ".join(cmd))
+    # SPL-196941 - diag fails on windows with french locale/language set
+    # In Python 3.6 a new encoding "oem" was added for CP_OEMCP code page
+    # If the encoding is not specified subprocess.Popen uses Windows
+    # default encoding which is cp1252
     opener = functools.partial(subprocess.Popen, cmd,
-                               stdout=subprocess.PIPE,
+                               stdout=subprocess.PIPE, encoding="oem",
                                stderr=subprocess.PIPE, shell=False)
     description = "Tasklist, windows process lister"
     runner = PopenRunner(opener, description)
@@ -1480,6 +1490,16 @@ def systemResources():
         system_info.write('\n\n********** mount output **********\n\n')
         exit_code, output = simplerunner(["mount"], timeout=2)
         system_info.write(output)
+
+        if suname[0] == 'Linux':
+            system_info.write('\n\n********** mdstat output **********\n\n')
+            if os.path.exists('/proc/mdstat'):
+                with open('/proc/mdstat') as mdstat:
+                    output = mdstat.read()
+            else:
+                output = "/proc/mdstat unavailable. no /proc mounted?\n"
+            system_info.write(output)
+
         system_info.write('\n\n********** cpu info **********\n\n')
         if suname[0] == 'SunOS':
             exit_code, output = simplerunner(["/usr/sbin/psrinfo", "-v"], timeout=2)
@@ -1560,16 +1580,7 @@ def kvStoreListing():
         logger.warn(msg)
         return
 
-    if os.name == "posix":
-        cmd = ["ls", "-alR", kvpath]
-        system_info.write(" ".join(cmd) + "\n")
-        exit_code, output = simplerunner(cmd, timeout=120)
-        if output:
-            system_info.write(output)
-    else:
-        # if/when converted to subprocess, will need to run via shell
-        system_info.write("dir /s/a \"%s\"\n" % kvpath)
-        system_info.write(os.popen("dir /s/a \"%s\"" % kvpath).read())
+    system_info.write(get_dir_listing(kvpath, recursive=True).decode())
 
     return
 
@@ -1603,16 +1614,6 @@ def splunkDBListing(options):
         system_info.write("\nIndex listing for index: %s\n\n" % index_name)
 
         if options.index_listing == "light":
-            # TODO: integrate these with get_dir_listing()
-            if os.name == "posix":
-                dir_cmd = ["ls", "-al"]
-                recursive_dir_cmd = ["ls", "-alR"]
-                start_shell = False
-            else:
-                dir_cmd = ["dir", "/a"]
-                recursive_dir_cmd = ["dir", "/s/a"]
-                start_shell = True
-
             for key_name, key_description in bucket_keys:
                 system_info.write("---for %s, listing %s: %s.\n\n" % (index_name, key_name, key_description))
                 db_path = path_set[key_name]
@@ -1621,21 +1622,7 @@ def splunkDBListing(options):
                     system_info.write("No path could be determined for this setting.\n")
                     continue # no reason to do ls/dir
 
-                cmd_args = dir_cmd + [db_path]
-                as_string = " ".join(cmd_args)
-                system_info.write(as_string + "\n")
-
-                p = subprocess.Popen(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                     shell=start_shell)
-                out, err = p.communicate()
-                if sys.version_info >= (3, 0):
-                    out = out.decode()
-                    err = err.decode()
-
-                system_info.write(out + "\n")
-                if err:
-                    system_info.write("Command listing command returned error text!\n")
-                    system_info.write(err + "\n")
+                system_info.write(get_dir_listing(db_path).decode() + '\n')
 
                 # Get contents of hot dirs for stuff like throttling!
                 try:
@@ -1651,22 +1638,9 @@ def splunkDBListing(options):
                     hot_path = os.path.join(db_path, hot)
                     if not os.path.isdir(hot_path):
                         continue
-                    cmd_args = recursive_dir_cmd + [hot_path]
-                    p = subprocess.Popen(cmd_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                         shell=start_shell)
 
-                    as_string = " ".join(cmd_args)
-                    system_info.write(as_string + "\n")
+                    system_info.write(get_dir_listing(hot_path, recursive=True).decode())
 
-                    out, err = p.communicate()
-                    if sys.version_info >= (3, 0):
-                        out = out.decode()
-                        err = err.decode()
-
-                    system_info.write(out + "\n")
-                    if err:
-                        system_info.write("Command listing command returned error text!\n")
-                        system_info.write(err + "\n")
         else:  # this is the 'full' listing
             for key_name, key_description in bucket_keys:
                 system_info.write("---for %s, listing %s: %s.\n\n" % (index_name, key_name, key_description))
@@ -1677,12 +1651,7 @@ def splunkDBListing(options):
                     system_info.write("No path could be determined for this setting.\n")
                     continue # no reason to do ls/dir
 
-                if os.name == "posix":
-                    # get a recursive listing of that path.
-                    system_info.write('\nls -alR "%s"\n' % db_path)
-                    system_info.write(os.popen('ls -alR "%s"' % db_path).read())
-                else:
-                    system_info.write(os.popen('dir /s/a "%s"' % db_path).read())
+                system_info.write(get_dir_listing(db_path, recursive=True).decode())
 
         # and now we list the 'summary' locations, independently.
         # split because they're always a recursive listing
@@ -1701,12 +1670,8 @@ def splunkDBListing(options):
                 system_info.write("This is normal when none have run yet.\n")
                 continue # no reason to do ls/dir
 
-            if os.name == "posix":
-                # get a recursive listing of that path.
-                system_info.write('\nls -alR "%s"\n' % db_path)
-                system_info.write(os.popen('ls -alR "%s"' % db_path).read())
-            else:
-                system_info.write(os.popen('dir /s/a "%s"' % db_path).read())
+            system_info.write('\n' + get_dir_listing(db_path, recursive=True).decode())
+
 
 def get_a_manifest(db_path, diag_base_path, manifest_filename):
     "Condensation of the below collectors"
@@ -1756,6 +1721,18 @@ def get_cachemanager_local_files(db_path, diag_base_path):
     for bucket in os.listdir(db_path):
         get_a_manifest(os.path.join(db_path, bucket), os.path.join(diag_base_path, bucket), "cachemanager_local.json")
 
+def copy_profiler_dir():
+    profiler_dir = os.path.join(SPLUNK_HOME, "var", "run", "profiler")
+    profiler_dir = bless_long_path(profiler_dir)
+    if not os.path.exists(profiler_dir):
+        return
+
+    try:
+        add_dir_to_diag(profiler_dir, "profiler")
+    except shutil.Error as copy_errors:
+        msg = "Some problems were encountered copying profiler files (likely these are not a problem):\n" + str(copy_errors)
+        logger.warn(msg)
+
 def copy_dispatch_dir():
      dispatch_dir = os.path.join(SPLUNK_HOME, "var", "run", "splunk", "dispatch")
      dispatch_dir = bless_long_path(dispatch_dir)
@@ -1773,7 +1750,7 @@ def copy_dispatch_dir():
              if not os.path.isdir(job_dir):
                 continue
 
-             listing = get_recursive_dir_listing(job_dir)
+             listing = get_dir_listing(job_dir, recursive=True)
              add_string_to_diag(listing, os.path.join("dispatch", job, "dir_info.txt"))
              # copy only files in the job's dir, skip all the .gz stuff
              for f in os.listdir(job_dir):
@@ -2571,7 +2548,7 @@ def filter_passwd(filename):
 ###################
 # internal utility
 
-def simplerunner(cmd, timeout, description=None, input=None):
+def simplerunner(cmd, timeout, description=None, input=None, shell=False):
     """ Using PopenRunner directly every time is tedious.  Do the typical stuff.
 
         cmd         :iterable of strings, eg argv
@@ -2579,17 +2556,33 @@ def simplerunner(cmd, timeout, description=None, input=None):
                      brutally killed
         description :string for logging about the command failing etc
         input       :string to stuff into stdin pipe the command
+        shell       :bool to say to use the shell when executing
     """
     cmd_string = " ".join(cmd)
     if not description:
         description = cmd_string
-    opener = functools.partial(subprocess.Popen, cmd,
-                               stdout=subprocess.PIPE, shell=False)
+
+    if os.name == "nt":
+        # SPL-196941 - diag fails on windows with french locale/language set
+        # In Python 3.6 a new encoding "oem" was added for CP_OEMCP code page
+        # If the encoding is not specified subprocess.Popen uses Windows
+        # default encoding which is cp1252
+        opener = functools.partial(subprocess.Popen, cmd,
+                               stdout=subprocess.PIPE, shell=shell, encoding="oem")
+    else:
+        opener = functools.partial(subprocess.Popen, cmd,
+                               stdout=subprocess.PIPE, shell=shell)
+
     runner = PopenRunner(opener, description=description)
     exit_code = runner.runcmd(timeout=timeout, input=input)
     out = runner.stdout
     if not out:
         out = "The command '%s' was cancelled due to timeout=%s\n" % (cmd_string, timeout)
+
+    if runner.stderr:
+        out += "Command returned error text\n"
+        out += runner.stderr
+
     return exit_code, out
 
 class PopenRunner(object):
@@ -2622,14 +2615,29 @@ class PopenRunner(object):
                 self.p_obj = self.opener()
                 if (input is not None) and sys.version_info >= (3, 0): input = input.encode()
                 self.stdout, self.stderr = self.p_obj.communicate(input=input)
-                if sys.version_info >= (3, 0):
-                    self.stdout = self.stdout.decode()
+                # SPL-196941 - diag fails on windows with french locale/language set
+                # With encoding="oem" passed in on Windows platform for subprocess.Popen
+                # self.stdout returns with already decoded text so no need to decode again.
+                if sys.version_info >= (3, 0) and (isinstance(self.stderr, bytes) or isinstance(self.stdout, bytes)):
+                    _locale = DEFAULT_LOCALE
+                    
+                    try:
+                      _locale = locale.getdefaultlocale()
+                    except Exception as e:
+                      # locale only reads environment variables so we can just pass
+                      logger.warning(DEFAULT_LOCALE_WARNING)
+                      pass
+                    
+                    if _locale is None or None in _locale:
+                      logger.warning(DEFAULT_LOCALE_WARNING)
+                      _locale = DEFAULT_LOCALE
+                    
+                    self.stdout = self.stdout.decode(_locale[1])
                     if self.stderr is not None:
-                        self.stderr = self.stderr.decode()
+                        self.stderr = self.stderr.decode(locale.getdefaultlocale()[1])
             except Exception as e:
                 class fake_pobj(object):
                     pass
-
                 if isinstance(e, OSError) and e.errno in (errno.ENOENT, errno.EPERM, errno.ENOEXEC, errno.EACCES):
                     # the program wasn't present, or permission denied; just report that.
 
@@ -2655,7 +2663,6 @@ class PopenRunner(object):
 
                     self.p_obj = fake_pobj()
                     self.p_obj.returncode = -1
-
 
         thread = threading.Thread(target=inthread_runner)
         thread.start()
@@ -2701,37 +2708,24 @@ def make_filterchain(*filters):
 
 detected_certs = []
 def looks_like_ssl_cert(path):
-    # I cannot determine any way to recognize asn.1 binary without full parsing
-    # them which seems scary. --jrod
-    asn_1_extensions = [
+    """ Check to see if a path 'looks' like a SSL Certificate
+        by suffix only, customer can have weird stuff in them
+        sometimes, see SPL-180896
+    """
+    cert_extensions = [
             ".cer",
             ".der",
             ".pfx",
             ".p12",
+            ".pem",
+            ".key",
+            ".crt",
     ]
-    for ext in asn_1_extensions:
+
+    for ext in cert_extensions:
         if path.endswith(ext):
             return True
 
-    # These guys have a fairly regular format.  The labels are moderately
-    # ad-hoc, but the -----BEGIN line-opener is required; see RFC7468 and its
-    # antecedents
-    pem_extensions = [
-        ".pem",
-        ".key",
-        ".crt",
-    ]
-    for ext in pem_extensions:
-        if path.endswith(ext):
-            try:
-                with open(path) as f:
-                    for line in f:
-                        if line.startswith("-----BEGIN"):
-                            return True
-            except IOError as e:
-                msg = "Failure to read file while trying to detect certs, presuming it is. %s"
-                logger.warn(msg, e)
-                return True
     return False
 
 def log_detected_certs():
@@ -2807,6 +2801,7 @@ def make_sizefilter(byte_limit):
             if file_size > limit:
                 logger.info("filtered out file '%s'  limit: %s  size: %s" %
                             (path, limit, file_size))
+                add_size_excluded_file(path)
                 ignore_set.add(entry)
         return ignore_set
     return new_sizefilter
@@ -2833,11 +2828,12 @@ def normalize_path(btool_path):
     if os.name == "nt":
         btool_path = os.path.normpath(btool_path)
 
+        btool_path = os.path.expandvars(btool_path)
         # For Windows if the path is a disk (i.e. "C:\") this will cause
         # the db path to be \\db, which will be treated like a network
         # path (No Good!).  Replace "\\" with "\" and the diag will be
         # created correctly.
-        btool_path = os.path.expandvars(btool_path).replace("\\\\", "\\")
+        btool_path = re.sub(r"(?<!^)\\\\", r"\\", btool_path)
     else:
         btool_path = os.path.expandvars(btool_path)
 
@@ -3050,25 +3046,45 @@ def splunkDBPaths():
 def get_listing(src, desc):
     """Gather recursive listing of files in a directory and all subdirectories"""
     system_info.write('\n\n********** %s dir listing **********\n' % desc)
-    # TODO: move this implementation to get_recursive_dir_listing, and add the
-    # header on top -- nontrivial due to handling failure cases.
+
     if not os.path.exists(src):
         return
-    if os.name == "posix":
-        # get a recursive listing of that path.
-        system_info.write('\nls -alR "%s"\n' % src)
-        system_info.write(os.popen('ls -alR "%s"' % src).read())
-    else:
-        system_info.write('\ndir /s/a "%s"\n' % src)
-        system_info.write(os.popen('dir /s/a "%s"' % src).read())
 
-def get_dir_listing(dir_path):
-    """Gather flat non-recursive listing of contents of one directory"""
+    # Match historical diags with newlines here...
+    system_info.write('\n' + get_dir_listing(src, recursive=True).decode())
+
+def get_dir_listing(dir_path, recursive=False):
+    """Gather, optionally recursive, listing of contents of one directory"""
+    # SPL-195619: verify dir_path is a valid directory to prevent arbitrary
+    # code execution, return an empty string to avoid causing an exception
+    if sys.version_info >= (3, 0):
+        # SPL- 204162 : ERROR Cannot process directory path in Windows after upgrade to 8.1.
+        # The shlex.quote() is needed to plug a security hole in a shell command but
+        # os.path.isdir() seem to always return False when this quote() function is used on Windows.
+        if os.name == "nt":
+            sanitized_dir_path = dir_path
+        else:
+            sanitized_dir_path = quote(dir_path)
+        if not os.path.isdir(sanitized_dir_path): 
+            logger.error("Cannot process directory path %s", sanitized_dir_path)
+            # ignore invalid directory and continue processing diag report
+            # replace invalid directory name with encoded empty string
+            return "".encode('utf-8')
     if os.name == "posix":
-        cmd = 'ls -al "%s"' % dir_path
+        if recursive:
+            cmd = 'ls -alR "%s"' % dir_path
+        else:
+            cmd = 'ls -al "%s"' % dir_path
+
     else:
-        cmd = 'dir /a "%s"' % dir_path
-    cmd_output = os.popen(cmd).read()
+        if recursive:
+            cmd = 'dir /s /a "%s"' % dir_path
+        else:
+            cmd = 'dir /a "%s"' % dir_path
+
+    # os.popen uses the shell, so we'll use it here too.
+    exit_code, cmd_output = simplerunner(cmd, timeout=60, shell=True)
+
     # cmd_output is bytes of uknknown encoding, so we can't combine it with a
     # a potentially unicode command (dir_path, and thus cmd are unicode objects
     # on windows)
@@ -3076,24 +3092,6 @@ def get_dir_listing(dir_path):
     # the output bytes.
     # TODO: since the encoding of the output is unknown, it should be stored
     # independently
-    if sys.version_info < (3, 0) and isinstance(cmd, unicode):
-        cmd_bytes =  cmd.encode('utf-8')
-    elif sys.version_info >= (3, 0) and isinstance(cmd, str):
-        cmd_bytes =  cmd.encode('utf-8')
-    else:
-        cmd_bytes =  cmd
-    if sys.version_info >= (3, 0):
-        cmd_output = cmd_output.encode('utf-8')
-    return cmd_bytes + b"\n" + cmd_output
-
-def get_recursive_dir_listing(dir_path):
-    """ return a recursive listing of the given dir """
-    if os.name == "posix":
-        cmd = 'ls -alR "%s"' % dir_path
-    else:
-        cmd = 'dir /s/a "%s"' % dir_path
-    cmd_output = os.popen(cmd).read()
-    # see comment in get_dir_listing() -- TODO: same
     if sys.version_info < (3, 0) and isinstance(cmd, unicode):
         cmd_bytes =  cmd.encode('utf-8')
     elif sys.version_info >= (3, 0) and isinstance(cmd, str):
@@ -3764,6 +3762,9 @@ def local_getopt(file_options, cmd_argv=sys.argv):
     upload_group.add_option("--firstchunk", type="int", metavar="chunk-number",
                       help="For resuming upload of a multi-part upload; select the first chunk to send")
 
+    upload_group.add_option("--chunksize", type="int", metavar="chunk-size",
+                            help="Optional set the chunksize in bytes to be uploaded")
+
     parser.add_option_group(upload_group)
 
     class Extension_Callback(object):
@@ -4005,6 +4006,16 @@ def add_excluded_file(path):
     reason = "EXCLUDE"
     excluded_filelist.append((reason, path))
 
+def add_size_excluded_file(path):
+    """tell the file exclude tracker that an absolute path has not been included
+       because it has exceeded the configured file size limit"""
+    logger.debug("add_size_excluded_file(%s)" % path)
+    if path.startswith(SPLUNK_HOME):
+        path = path[len(SPLUNK_HOME):]
+        path = get_diag_name() + path
+    reason = "SIZE"
+    excluded_filelist.append((reason, path))
+
 def get_excluded_filelist():
     return excluded_filelist
 
@@ -4159,6 +4170,14 @@ def create_diag(options, log_buffer):
         logger.info("Getting Sinkhole filenames...")
         get_listing(os.path.join(SPLUNK_HOME, 'var', 'spool', 'splunk'), 'sinkhole')
 
+        desc = 'profiler files'
+        if 'profiler' in options.components:
+            logger.info('Getting %s listings...' % desc)
+            src = os.path.join(SPLUNK_HOME, 'var', 'run', 'profiler')
+            get_listing(src, desc)
+        else:
+            logger.info('Skipping %s listings...' % desc)
+
         desc = 'search peer bundles'
         if 'searchpeers' in options.components:
             logger.info('Getting %s listings...' % desc)
@@ -4252,6 +4271,12 @@ def create_diag(options, log_buffer):
             logger.warn(err_msg % e.strerror)
 
 
+
+    if not 'profiler' in options.components:
+        logger.info("Skipping Splunk profiler files...")
+    else:
+        logger.info("Copying Splunk profiler files...")
+        copy_profiler_dir()
 
     if not 'dispatch' in options.components:
         logger.info("Skipping Splunk dispatch files...")
@@ -4504,8 +4529,16 @@ def discover_apps():
                 msg += " Will use global value '%s'" % "100MB"
                 logger.error(msg)
 
+        # SPL-207752 - Path Traversal Vulnerability in Diag app extension "extension-script" setting
+        # Check that the extension script is located in the app's /bin directory
+        app_bin_path = os.path.join(app_info.app_dir, 'bin')
+        script_path = os.path.join(app_bin_path, extension_script)
+        if(os.path.commonpath((os.path.realpath(script_path), app_bin_path)) != app_bin_path):
+            msg = ("Extension script path '%s' not supported. The script must be located in your app's /bin directory, and no other path is allowed.")
+            logger.warn(msg, extension_script)
+            continue
+
         # the app wants us to run it .. is the file there?
-        script_path = os.path.join(app_info.app_dir, 'bin', extension_script)
         if os.path.isfile(script_path):
             # good enough, we'll collect this one
             app_info.add_extension_info(diag_extension_file = script_path,
@@ -5384,7 +5417,7 @@ def slice_and_upload(path, options, slicesize):
     chance to bail.
     """
     #Will likely need rejiggering when we expose to UI.
-    if not options.firstchunk:
+    if not options.firstchunk and not options.chunksize:
         logger.info("---")
         logger.info("Upload file size exceeds the maximum per attachment.")
         logger.info("Oversize uploads can create extra work and slow case resolution.")
@@ -5401,9 +5434,10 @@ def slice_and_upload(path, options, slicesize):
         sys.stdout.write("\n")
 
     file_size = os.stat(path).st_size
-    logger.info("Upload size '%s' larger than the limit '%s'", file_size,
-                slicesize)
-    logger.info("Splitting into chunks to upload.")
+    if file_size > slicesize:
+        logger.info("Upload size '%s' larger than the limit '%s'", file_size, slicesize)
+        logger.info("Splitting into chunks to upload.")
+
     offset_starts = list(range(0, file_size, slicesize))
     chunk_num = 1
     chunk_total = len(offset_starts)
@@ -5412,11 +5446,11 @@ def slice_and_upload(path, options, slicesize):
         chunk_num = options.firstchunk
         offset_starts = offset_starts[options.firstchunk-1:]
 
-    def chunk_complain(chunk_num):
+    def chunk_complain(chunk_num, slicesize):
         # Helper to issue info & suggestion to continue
         if chunk_num >1:
             logger.error("Failed while uploading chunk %s.", chunk_num)
-            logger.info("You may wish to retry uploading from this chunk with --upload-file <filename> --firstchunk %s", chunk_num)
+            logger.info("You may wish to retry uploading from this chunk with --upload-file <filename> --firstchunk %s --chunksize %s", chunk_num, slicesize)
             global chunk_complained
             chunk_complained = True
 
@@ -5430,10 +5464,10 @@ def slice_and_upload(path, options, slicesize):
         try:
             if not upload_to_splunkcom(path, options, file_start, file_end,
                                        chunk_num, chunk_total):
-                chunk_complain(chunk_num)
+                chunk_complain(chunk_num, slicesize)
                 return False
         except:
-            chunk_complain(chunk_num)
+            chunk_complain(chunk_num, slicesize)
             raise
         chunk_num += 1
 
@@ -5800,10 +5834,15 @@ def upload_file(path, target, options):
         return False
 
     valid_targets = ['splunkcom']
+
     if not target in valid_targets:
         raise NotImplemented
 
-    if not upload_to_splunkcom(path, options):
+    if options.chunksize:
+        if not slice_and_upload(path, options, options.chunksize):
+            logger.warn("Cannot slice and upload")
+            return False
+    elif not upload_to_splunkcom(path, options):
         logger.warn("Upload was not successful.")
         return False
     return True

@@ -188,201 +188,198 @@ class SessionQueue(Queue):
     def lifo(self, delete=True): 
         return super(SessionQueue, self).lifo(delete)
 
+# Tests
+import unittest
+
+class QueueTests(unittest.TestCase):
+
+    def testQueue(self):
+        queue = Queue()
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+
+        self.assertTrue(len(queue.get_levels()) is 1)
+        self.assertTrue(queue.get_levels()[0] is "notice")
+        self.assertTrue(queue.get_len(level="notice") is 3)
+        self.assertTrue(queue.get_len() is 3)
+        self.assertTrue(len(queue.get_level("notice")) is 3)
+        self.assertTrue(len(queue.get_level("notice")) is 0)
+        self.assertTrue(queue.get_len(level="notice") is 0)
+        self.assertTrue(queue.get_len() is 0)
+
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+
+        self.assertTrue(len(queue.get_level("notice", delete=False)) is 3)
+        self.assertTrue(len(queue.get_level("notice")) is 3)
+        self.assertTrue(len(queue.get_level("notice")) is 0)
+
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+        queue.add("message", "message string1")
+        queue.add("message", "message string2")
+        queue.add("message", "message string3")
+        queue.add("message", "message string4")
+
+        self.assertTrue(len(queue.get_levels()) is 2)
+        self.assertTrue(queue.get_levels().index("notice") is 1)
+        self.assertTrue(queue.get_levels().index("message") is 0)
+        self.assertTrue(queue.get_len(level="notice") is 3)
+        self.assertTrue(queue.get_len(level="message") is 4)
+        self.assertTrue(queue.get_len() is 7)
+
+        messages = queue.get_all()
+
+        self.assertTrue(queue.get_len(level="notice") is 0)
+        self.assertTrue(queue.get_len(level="message") is 0)
+        self.assertTrue(queue.get_len() is 0)
+        self.assertTrue(len(messages) is 7)
+        self.assertTrue(len(queue.get_level("notice")) is 0)
+        self.assertTrue(len(queue.get_level("message")) is 0)
+
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+        queue.add("message", "message string1")
+        queue.add("message", "message string2")
+        queue.add("message", "message string3")
+        queue.add("message", "message string4")
+
+        self.assertTrue(queue.get_len(level="notice") is 3)
+        self.assertTrue(queue.get_len(level="message") is 4)
+        self.assertTrue(queue.get_len() is 7)
+
+        messages = queue.get_all(delete=False)
+
+        self.assertTrue(queue.get_len(level="notice") is 3)
+        self.assertTrue(queue.get_len(level="message") is 4)
+        self.assertTrue(queue.get_len() is 7)
+        self.assertTrue(len(messages) is 7)
+        self.assertTrue(len(queue.get_level("notice")) is 3)
+        self.assertTrue(len(queue.get_level("message")) is 4)
+
+        queue = Queue()
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+
+        self.assertTrue(queue.fifo(delete=False)['message'] is "notice string1")
+        self.assertTrue(queue.fifo(delete=True)['message'] is "notice string1")
+        self.assertTrue(queue.fifo(delete=True)['message'] is "notice string2")
+        self.assertTrue(queue.fifo(delete=True)['message'] is "notice string3")
+        self.assertTrue(queue.fifo(delete=True) is None)
+
+        queue = Queue()
+        queue.add("notice", "notice string1")
+        queue.add("notice", "notice string2")
+        queue.add("notice", "notice string3")
+
+        self.assertTrue(queue.lifo(delete=False)['message'] is "notice string3")
+        self.assertTrue(queue.lifo(delete=True)['message'] is "notice string3")
+        self.assertTrue(queue.lifo(delete=True)['message'] is "notice string2")
+        self.assertTrue(queue.lifo(delete=True)['message'] is "notice string1")
+        self.assertTrue(queue.lifo(delete=True) is None)
+
+class QueueTestsChanged(unittest.TestCase):
+    
+    def setUp(self):
+        self.queue = Queue()
+        self.assertTrue(self.queue.isChanged() is False)
+
+        self.queue.add("notice", "notice string1")
+        self.assertTrue(self.queue.isChanged() is True)
+
+    def testQueueChangedGetLevel(self):
+        #get_level
+        self.queue.get_level("notice", False)
+        self.assertTrue(self.queue.isChanged() is False)
+        self.queue.get_level("notice", True)
+        self.assertTrue(self.queue.isChanged() is True)
+        self.queue.get_level("notice")
+        self.assertTrue(self.queue.isChanged() is False)
+
+        self.queue.add("notice", "notice string1")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.queue.get_level("message", True)
+        self.assertTrue(self.queue.isChanged() is False)
+        self.queue.get_level("notice", True)
+        self.assertTrue(self.queue.isChanged() is True)
+
+    def testQueueChangedGetAll(self):
+        #get_level
+        self.queue.get_all(False)
+        self.assertTrue(self.queue.isChanged() is False)
+        self.queue.get_all(True)
+        self.assertTrue(self.queue.isChanged() is True)
+        self.queue.get_all()
+        self.assertTrue(self.queue.isChanged() is False)
+
+    def testQueueChangedFifo(self):
+        #get_level
+        self.queue.add("notice", "notice string2")
+        self.queue.add("notice", "notice string3")
+
+        self.assertTrue(self.queue.fifo(delete=False)['message'] == "notice string1")
+        self.assertTrue(self.queue.isChanged() is False)
+        self.assertTrue(self.queue.fifo(delete=True)['message'] == "notice string1")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.fifo(delete=True)['message'] == "notice string2")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.fifo(delete=True)['message'] == "notice string3")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.fifo(delete=True) is None)
+        self.assertTrue(self.queue.isChanged() is False)
+
+    def testQueueChangedLifo(self):
+        #get_level
+        self.queue.add("notice", "notice string2")
+        self.queue.add("notice", "notice string3")
+
+        self.assertTrue(self.queue.lifo(delete=False)['message'] == "notice string3")
+        self.assertTrue(self.queue.isChanged() is False)
+        self.assertTrue(self.queue.lifo(delete=True)['message'] == "notice string3")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.lifo(delete=True)['message'] == "notice string2")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.lifo(delete=True)['message'] == "notice string1")
+        self.assertTrue(self.queue.isChanged() is True)
+        self.assertTrue(self.queue.lifo(delete=True) is None)
+        self.assertTrue(self.queue.isChanged() is False)
+
+class SessionQueueTests(unittest.TestCase):
+    
+    def setUp(self):
+        self.queue = SessionQueue()
+
+        cherrypy._test_session_has_changed = False
+
+    def tearDown(self):
+        self.assertTrue(cherrypy._test_session_has_changed is True)
+        self.queue = None
+
+    def testSessionQueueAdding(self):
+        self.queue.add('error', 'foo')
+
+    def testSessionQueueGetLevel(self):
+        self.queue.get_level('error')
+
+    def testSessionQueueGetAll(self):
+        self.queue.get_all()
+
+    def testSessionQueueFifo(self):
+        self.queue.fifo()
+            
+    def testSessionQueueLifo(self):
+        self.queue.lifo()
+
 
 if __name__ == '__main__':
-
-    import unittest
-    
-    class QueueTests(unittest.TestCase):
-
-        def testQueue(self):
-            queue = Queue()
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-
-            self.assert_(len(queue.get_levels()) is 1)
-            self.assert_(queue.get_levels()[0] is "notice")
-            self.assert_(queue.get_len(level="notice") is 3)
-            self.assert_(queue.get_len() is 3)
-            self.assert_(len(queue.get_level("notice")) is 3)
-            self.assert_(len(queue.get_level("notice")) is 0)
-            self.assert_(queue.get_len(level="notice") is 0)
-            self.assert_(queue.get_len() is 0)
-    
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-
-            self.assert_(len(queue.get_level("notice", delete=False)) is 3)
-            self.assert_(len(queue.get_level("notice")) is 3)
-            self.assert_(len(queue.get_level("notice")) is 0)
-
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-            queue.add("message", "message string1")
-            queue.add("message", "message string2")
-            queue.add("message", "message string3")
-            queue.add("message", "message string4")
-
-            self.assert_(len(queue.get_levels()) is 2)
-            self.assert_(queue.get_levels().index("notice") is 1)
-            self.assert_(queue.get_levels().index("message") is 0)
-            self.assert_(queue.get_len(level="notice") is 3)
-            self.assert_(queue.get_len(level="message") is 4)
-            self.assert_(queue.get_len() is 7)
-
-            messages = queue.get_all()
-
-            self.assert_(queue.get_len(level="notice") is 0)
-            self.assert_(queue.get_len(level="message") is 0)
-            self.assert_(queue.get_len() is 0)
-            self.assert_(len(messages) is 7)
-            self.assert_(len(queue.get_level("notice")) is 0)
-            self.assert_(len(queue.get_level("message")) is 0)
-
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-            queue.add("message", "message string1")
-            queue.add("message", "message string2")
-            queue.add("message", "message string3")
-            queue.add("message", "message string4")
-
-            self.assert_(queue.get_len(level="notice") is 3)
-            self.assert_(queue.get_len(level="message") is 4)
-            self.assert_(queue.get_len() is 7)
-
-            messages = queue.get_all(delete=False)
-
-            self.assert_(queue.get_len(level="notice") is 3)
-            self.assert_(queue.get_len(level="message") is 4)
-            self.assert_(queue.get_len() is 7)
-            self.assert_(len(messages) is 7)
-            self.assert_(len(queue.get_level("notice")) is 3)
-            self.assert_(len(queue.get_level("message")) is 4)
-
-            queue = Queue()
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-
-            self.assert_(queue.fifo(delete=False)['message'] is "notice string1")
-            self.assert_(queue.fifo(delete=True)['message'] is "notice string1")
-            self.assert_(queue.fifo(delete=True)['message'] is "notice string2")
-            self.assert_(queue.fifo(delete=True)['message'] is "notice string3")
-            self.assert_(queue.fifo(delete=True) is None)
-
-            queue = Queue()
-            queue.add("notice", "notice string1")
-            queue.add("notice", "notice string2")
-            queue.add("notice", "notice string3")
-
-            self.assert_(queue.lifo(delete=False)['message'] is "notice string3")
-            self.assert_(queue.lifo(delete=True)['message'] is "notice string3")
-            self.assert_(queue.lifo(delete=True)['message'] is "notice string2")
-            self.assert_(queue.lifo(delete=True)['message'] is "notice string1")
-            self.assert_(queue.lifo(delete=True) is None)
-
-    class QueueTestsChanged(unittest.TestCase):
-        
-        def setUp(self):
-            self.queue = Queue()
-            self.assert_(self.queue.isChanged() is False)
-
-            self.queue.add("notice", "notice string1")
-            self.assert_(self.queue.isChanged() is True)
-
-        def testQueueChangedGetLevel(self):
-            #get_level
-            self.queue.get_level("notice", False)
-            self.assert_(self.queue.isChanged() is False)
-            self.queue.get_level("notice", True)
-            self.assert_(self.queue.isChanged() is True)
-            self.queue.get_level("notice")
-            self.assert_(self.queue.isChanged() is False)
-
-            self.queue.add("notice", "notice string1")
-            self.assert_(self.queue.isChanged() is True)
-            self.queue.get_level("message", True)
-            self.assert_(self.queue.isChanged() is False)
-            self.queue.get_level("notice", True)
-            self.assert_(self.queue.isChanged() is True)
-
-        def testQueueChangedGetAll(self):
-            #get_level
-            self.queue.get_all(False)
-            self.assert_(self.queue.isChanged() is False)
-            self.queue.get_all(True)
-            self.assert_(self.queue.isChanged() is True)
-            self.queue.get_all()
-            self.assert_(self.queue.isChanged() is False)
-
-        def testQueueChangedFifo(self):
-            #get_level
-            self.queue.add("notice", "notice string2")
-            self.queue.add("notice", "notice string3")
-
-            self.assert_(self.queue.fifo(delete=False)['message'] == "notice string1")
-            self.assert_(self.queue.isChanged() is False)
-            self.assert_(self.queue.fifo(delete=True)['message'] == "notice string1")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.fifo(delete=True)['message'] == "notice string2")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.fifo(delete=True)['message'] == "notice string3")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.fifo(delete=True) is None)
-            self.assert_(self.queue.isChanged() is False)
-
-        def testQueueChangedLifo(self):
-            #get_level
-            self.queue.add("notice", "notice string2")
-            self.queue.add("notice", "notice string3")
-
-            self.assert_(self.queue.lifo(delete=False)['message'] == "notice string3")
-            self.assert_(self.queue.isChanged() is False)
-            self.assert_(self.queue.lifo(delete=True)['message'] == "notice string3")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.lifo(delete=True)['message'] == "notice string2")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.lifo(delete=True)['message'] == "notice string1")
-            self.assert_(self.queue.isChanged() is True)
-            self.assert_(self.queue.lifo(delete=True) is None)
-            self.assert_(self.queue.isChanged() is False)
-
-
-    class SessionQueueTests(unittest.TestCase):
-        
-        def setUp(self):
-            self.queue = SessionQueue()
-
-            cherrypy._test_session_has_changed = False
-
-        def tearDown(self):
-            self.assert_(cherrypy._test_session_has_changed is True)
-            self.queue = None
-
-        def testSessionQueueAdding(self):
-            self.queue.add('error', 'foo')
-
-        def testSessionQueueGetLevel(self):
-            self.queue.get_level('error')
-
-        def testSessionQueueGetAll(self):
-            self.queue.get_all()
-
-        def testSessionQueueFifo(self):
-            self.queue.fifo()
-                
-        def testSessionQueueLifo(self):
-            self.queue.lifo()
-
-
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(QueueTests))
     suites.append(loader.loadTestsFromTestCase(QueueTestsChanged))
     suites.append(loader.loadTestsFromTestCase(SessionQueueTests))
     unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite(suites))
-

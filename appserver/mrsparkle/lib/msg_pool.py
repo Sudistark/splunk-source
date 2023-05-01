@@ -253,55 +253,58 @@ class _UIMsgPool(object):
 
 
 # ---------------------------
+
+# Tests
+import unittest
+from splunk.util import pytest_mark_skip_conditional
+
+MSG_POOL_UI = 'UIMsgPool'
+
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class MgrPoolTests(unittest.TestCase):
+
+   test_id = ''
+
+   def setUp(self):
+      splunk.auth.getSessionKey('admin', 'changeme')
+      class SessionMock(dict):
+         def escalate_lock(self):
+               pass
+      session = SessionMock()
+      session['user'] = {'name': 'admin'}
+      setattr(cherrypy, 'session', session)
+
+   def testSinletonMgrPool(self):
+      mgr1 = MsgPoolMgr.get_poolmgr_instance()
+      mgr2 = MsgPoolMgr.get_poolmgr_instance()
+      self.assertEqual(id(mgr1), id(mgr2))
+
+   def testUIQCreate(self):
+      mgr = MsgPoolMgr.get_poolmgr_instance()
+      uiq1 = mgr.get_msgq(MSG_POOL_UI)
+      uiq2 = mgr.get_msgq(MSG_POOL_UI)
+      self.assertEqual(id(uiq1), id(uiq2))
+
+   def testUIQInsert(self):
+      mgr = MsgPoolMgr.get_poolmgr_instance()
+      uiq = mgr.get_msgq(MSG_POOL_UI)
+      MgrPoolTests.test_id = uiq.push('error', 'msg text')
+      self.assertEqual(len(uiq), 1)
+
+   def testUIQPop(self):
+      mgr = MsgPoolMgr.get_poolmgr_instance()
+      uiq = mgr.get_msgq(MSG_POOL_UI)
+      x = uiq.pop(MgrPoolTests.test_id)
+      self.assertTrue(isinstance(x, Msg))
+
+   def testUIQFlush(self):
+      mgr = MsgPoolMgr.get_poolmgr_instance()
+      uiq = mgr.get_msgq(MSG_POOL_UI)
+      x = uiq.flush()
+      self.assertEqual(len(uiq), 0)
+
+
 if __name__ == '__main__':
-
-   import unittest
-
-   MSG_POOL_UI = 'UIMsgPool'
-
-   class MgrPoolTests(unittest.TestCase):
-
-      test_id = ''
-
-
-      def setUp(self):
-        splunk.auth.getSessionKey('admin', 'changeme')
-        class SessionMock(dict):
-            def escalate_lock(self):
-                pass
-        session = SessionMock()
-        session['user'] = {'name': 'admin'}
-        setattr(cherrypy, 'session', session)
-
-      def testSinletonMgrPool(self):
-         mgr1 = MsgPoolMgr.get_poolmgr_instance()
-         mgr2 = MsgPoolMgr.get_poolmgr_instance()
-         self.assertEquals(id(mgr1), id(mgr2))
-
-      def testUIQCreate(self):
-         mgr = MsgPoolMgr.get_poolmgr_instance()
-         uiq1 = mgr.get_msgq(MSG_POOL_UI)
-         uiq2 = mgr.get_msgq(MSG_POOL_UI)
-         self.assertEquals(id(uiq1), id(uiq2))
-
-      def testUIQInsert(self):
-         mgr = MsgPoolMgr.get_poolmgr_instance()
-         uiq = mgr.get_msgq(MSG_POOL_UI)
-         MgrPoolTests.test_id = uiq.push('error', 'msg text')
-         self.assertEquals(len(uiq), 1)
-
-      def testUIQPop(self):
-         mgr = MsgPoolMgr.get_poolmgr_instance()
-         uiq = mgr.get_msgq(MSG_POOL_UI)
-         x = uiq.pop(MgrPoolTests.test_id)
-         self.assertTrue(isinstance(x, Msg))
-
-      def testUIQFlush(self):
-         mgr = MsgPoolMgr.get_poolmgr_instance()
-         uiq = mgr.get_msgq(MSG_POOL_UI)
-         x = uiq.flush()
-         self.assertEquals(len(uiq), 0)
-
    loader = unittest.TestLoader()
    suites = []
    suites.append(loader.loadTestsFromTestCase(MgrPoolTests))

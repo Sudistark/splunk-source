@@ -37,14 +37,14 @@ def splunkParse(splunk):
 
     return clauses
 
+import unittest
+
+class TestParse(unittest.TestCase):
+    def testPass(self):
+        print(splunkParse("search host=* | fields +punct | timechart avg(widgets)"))
 
 if __name__ == "__main__":
-    import unittest
-
-    class TestParse(unittest.TestCase):
-        def testPass(self):
-            print(splunkParse("search host=* | fields +punct | timechart avg(widgets)"))
-
     # Execute test suite.
     parseSuite = unittest.TestLoader().loadTestsFromTestCase(TestParse)
     unittest.TextTestRunner(verbosity=3).run(parseSuite)
+

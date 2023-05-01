@@ -9,7 +9,7 @@ from builtins import map
 
 import os, sys, time
 import logging
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import json
 import xml.sax.saxutils as su
 try:
@@ -556,6 +556,12 @@ def simpleRequest(path, sessionKey=None, getargs=None, postargs=None, method='GE
         raise splunk.LicenseRestriction
 
     elif serverResponse.status == 403:
+
+        # SPL-174568 - In case of authorization failures, we raise the
+        # AuthorizationFailed exception but do not include the failure message.
+        # Logging the authorization failure message so we have some info
+        # to diagnose the scenarios why authorization failed.
+        logger.info('Authorization Failed: %s' % serverContent)
         raise splunk.AuthorizationFailed(extendedMessages=uri)
 
     elif serverResponse.status == 404:

@@ -1,5 +1,5 @@
 from __future__ import absolute_import
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 
 import splunk.models.legacy_views.base as base
 import splunk.util
@@ -388,72 +388,73 @@ class TimeInput(BaseInput):
             output['params']['label'] = self.label
         return output
 
+#
+# Unittests
+#
+import unittest
+import splunk.safe_lxml_etree as et
 
+class DropdownInputTests(unittest.TestCase):
+    
+    def test_serization(self):
+        xml = '''<input type="dropdown" token="username" searchWhenChanged="True">
+                    <label>Select name</label>
+                    <default>Nate</default>
+                    <choice value="*">Any</choice>
+                    <choice value="nagrin">Nate</choice>
+                    <choice value="amrit">Amrit</choice>
+                    <populatingSearch earliest="-40m" latest="-10m" fieldForValue="foo" fieldForLabel="bar">search foo bar</populatingSearch>
+                </input>'''
+
+        di1 = DropdownInput()
+        di1.fromXml(et.fromstring(xml))
+        
+        xml2 = et.tostring(di1.toXml())
+        
+        di2 = DropdownInput()
+        di2.fromXml(et.fromstring(xml2))
+        
+        self.assertEqual(di1.search, di2.search)
+        self.assertEqual(di1.earliest, di2.earliest)
+        self.assertEqual(di1.latest, di2.latest)
+        self.assertEqual(di1.searchWhenChanged, di2.searchWhenChanged)
+        self.assertEqual(di1.staticFields, di2.staticFields)
+        self.assertEqual(di1.searchFields, di2.searchFields)
+        self.assertEqual(di1.selected, di2.selected)
+        self.assertEqual(di1.savedSearch, di2.savedSearch)
+        
+class RadioInputTests(unittest.TestCase):
+    
+    def test_serialization(self):
+        xml = '''<input type="radio" token="username" searchWhenChanged="True">
+                    <label>Select name</label>
+                    <default>Nate</default>
+                    <choice value="*">Any</choice>
+                    <choice value="nagrin">Nate</choice>
+                    <choice value="amrit">Amrit</choice>
+                    <populatingSearch earliest="-40m" latest="-10m" fieldForValue="foo" fieldForLabel="bar">search foo bar</populatingSearch>
+                </input>'''
+
+        di1 = RadioInput()
+        di1.fromXml(et.fromstring(xml))
+        
+        xml2 = et.tostring(di1.toXml())
+        
+        di2 = RadioInput()
+        di2.fromXml(et.fromstring(xml2))
+        
+        self.assertEqual(di1.search, di2.search)
+        self.assertEqual(di1.earliest, di2.earliest)
+        self.assertEqual(di1.latest, di2.latest)
+        self.assertEqual(di1.searchWhenChanged, di2.searchWhenChanged)
+        self.assertEqual(di1.staticFields, di2.staticFields)
+        self.assertEqual(di1.searchFields, di2.searchFields)
+        self.assertEqual(di1.checked, di2.checked)
+        self.assertEqual(di1.name, di2.name)
+        self.assertEqual(di1.savedSearch, di2.savedSearch)
 
 
 if __name__ == '__main__':
-    import unittest
-    from lxml import etree as et
-    
-    class DropdownInputTests(unittest.TestCase):
-        
-        def test_serization(self):
-            xml = '''<input type="dropdown" token="username" searchWhenChanged="True">
-                        <label>Select name</label>
-                        <default>Nate</default>
-                        <choice value="*">Any</choice>
-                        <choice value="nagrin">Nate</choice>
-                        <choice value="amrit">Amrit</choice>
-                        <populatingSearch earliest="-40m" latest="-10m" fieldForValue="foo" fieldForLabel="bar">search foo bar</populatingSearch>
-                    </input>'''
-    
-            di1 = DropdownInput()
-            di1.fromXml(et.fromstring(xml))
-            
-            xml2 = et.tostring(di1.toXml())
-            
-            di2 = DropdownInput()
-            di2.fromXml(et.fromstring(xml2))
-            
-            self.assertEqual(di1.search, di2.search)
-            self.assertEqual(di1.earliest, di2.earliest)
-            self.assertEqual(di1.latest, di2.latest)
-            self.assertEqual(di1.searchWhenChanged, di2.searchWhenChanged)
-            self.assertEqual(di1.staticFields, di2.staticFields)
-            self.assertEqual(di1.searchFields, di2.searchFields)
-            self.assertEqual(di1.selected, di2.selected)
-            self.assertEqual(di1.savedSearch, di2.savedSearch)
-            
-    class RadioInputTests(unittest.TestCase):
-        
-        def test_serialization(self):
-            xml = '''<input type="radio" token="username" searchWhenChanged="True">
-                        <label>Select name</label>
-                        <default>Nate</default>
-                        <choice value="*">Any</choice>
-                        <choice value="nagrin">Nate</choice>
-                        <choice value="amrit">Amrit</choice>
-                        <populatingSearch earliest="-40m" latest="-10m" fieldForValue="foo" fieldForLabel="bar">search foo bar</populatingSearch>
-                    </input>'''
-    
-            di1 = RadioInput()
-            di1.fromXml(et.fromstring(xml))
-            
-            xml2 = et.tostring(di1.toXml())
-            
-            di2 = RadioInput()
-            di2.fromXml(et.fromstring(xml2))
-            
-            self.assertEqual(di1.search, di2.search)
-            self.assertEqual(di1.earliest, di2.earliest)
-            self.assertEqual(di1.latest, di2.latest)
-            self.assertEqual(di1.searchWhenChanged, di2.searchWhenChanged)
-            self.assertEqual(di1.staticFields, di2.staticFields)
-            self.assertEqual(di1.searchFields, di2.searchFields)
-            self.assertEqual(di1.checked, di2.checked)
-            self.assertEqual(di1.name, di2.name)
-            self.assertEqual(di1.savedSearch, di2.savedSearch)
-
     # exec all tests
     suites = [
         DropdownInputTests,

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import time
+from splunk.util import pytest_mark_skip_conditional
 from future.moves.urllib import parse as urllib_parse
 
 import splunk
@@ -721,205 +722,200 @@ class Entity(object):
 
         return props
 
-# tests
+#
+# unittests
+#
+
+import unittest
+
+#logging.basicConfig(level=logging.DEBUG)
+
+class EntityGettersTest(unittest.TestCase):
+
+    def testEndpointConstruct(self):
+
+        self.assertEqual(
+            buildEndpoint('myclass'),
+            '/services/myclass'
+        )
+
+        self.assertEqual(
+            buildEndpoint('my/class'),
+            '/services/my/class'
+        )
+
+        self.assertEqual(
+            buildEndpoint('my/class', 'objname'),
+            '/services/my/class/objname'
+        )
+
+        self.assertEqual(
+            buildEndpoint('my/class', namespace='virtualNS'),
+            '/servicesNS/%s/virtualNS/my/class' % EMPTY_OWNER_NAME
+        )
+
+        self.assertEqual(
+            buildEndpoint('my/class', namespace='virtualNS', owner='mildred'),
+            '/servicesNS/mildred/virtualNS/my/class'
+        )
+
+        self.assertEqual(
+            buildEndpoint('my/class', entityName='everything (*&^%%$$', namespace='virtual space NS', owner='mildred user'),
+            '/servicesNS/mildred%20user/virtual%20space%20NS/my/class/everything%20%28%2A%26%5E%25%25%24%24'
+        )
+
+class EntityTest(unittest.TestCase):
+
+    def testConstructor(self):
+
+        x = Entity('test/path/here', 'test_name')
+
+        self.assertEqual(x.path, 'test/path/here')
+        self.assertEqual(x.name, 'test_name')
+        self.assertEqual(x.id, 'test_name')
+
+    def testContentParseString(self):
+        x = Entity('the/path', 'the_name', 'I am plain string')
+        
+        self.assertEqual(x.value, 'I am plain string')
+        self.assertEqual(x.properties, {})
+
+        x = Entity('the/path', 'the_name', 'abc_\u03a0\u03a3\u03a9.txt'.encode('UTF-8'))
+        self.assertEqual(x.value, 'abc_\u03a0\u03a3\u03a9.txt')
+        self.assertEqual(x.properties, {})
+
+    def testContentParseDict(self):
+
+        x = Entity('the/path', 'the_name', {'a':1, 'b':'abc_\u03a0\u03a3\u03a9.txt'.encode('UTF-8'), '\u03a0c':3})
+
+        self.assertEqual(x.value, None)
+        self.assertEqual(x.properties, {'a':1, 'b':'abc_\u03a0\u03a3\u03a9.txt'.encode('UTF-8'), '\u03a0c':3})
+        self.assertEqual(x['a'], 1)
+        self.assertTrue('a' in x)
+        self.assertEqual(x['\u03a0c'], 3)
+
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class SavedSearchTest(unittest.TestCase):
+
+    def setUp(self):
+        import splunk.auth as auth
+        self.sessionKey = auth.getSessionKey('admin', 'changeme')
+        self.owner = 'admin'
+
+    def testListing(self):
+
+        listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
+        self.assertTrue('Errors in the last hour' in listing)
+
+        entityList = getEntitiesList('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
+        listContainsSearch = False
+        for entity in entityList:
+            if entity.name == 'Errors in the last hour':
+                listContainsSearch = True
+                break
+        self.assertTrue(listContainsSearch)
+
+    """
+    def testFilterListing(self):
+
+        filters = {
+        'viewstate.resultView': 'reportView'
+        }
+        listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, filters=filters, owner=self.owner)
+
+        self.assert_('Messages by minute last 3 hours' in listing)
+        self.assert_('Splunk errors last 24 hours' not in listing)
+    """
+
+    def testSearchFilterListing(self):
+
+        filters = 'access_*'
+        listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, search=filters, owner=self.owner)
+
+        self.assertTrue('Splunk errors last 24 hours' not in listing)
+        self.assertTrue('Errors in the last 24 hours' in listing)
+
+    def testSingle(self):
+
+        entity = getEntity('saved/searches', 'Errors in the last 24 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
+
+        self.assertTrue(isinstance(entity, Entity))
+
+        self.assertEqual(entity.name, 'Errors in the last 24 hours')
+        self.assertEqual(entity['search'], 'error OR failed OR severe OR ( sourcetype=access_* ( 404 OR 500 OR 503 ) )')
+
+
+
+    def testNonExistent(self):
+
+        self.assertRaises(splunk.ResourceNotFound, getEntity, 'whoa_nellie', self.sessionKey)
+
+    def testCreateAndDelete(self):
+
+        name = 'test_saved_search_' + str(int(time.time()))
+        string = '| search foo'
+        #namespace = 'samples'
+        #namespace = 'debug' #samples app no longer included in build, see SPL-18783
+        namespace = 'search' #apparently debug isn't either... just do it in the search app.
+
+        search = Entity('saved/searches', name, namespace=namespace, owner=self.owner)
+        search['search'] = string
+        setEntity(search)
+
+        challenge = getEntity('saved/searches', name, namespace=namespace, owner=self.owner)
+        self.assertEqual(challenge.name, name)
+        self.assertEqual(challenge.namespace, namespace)
+        self.assertEqual(challenge['search'], string)
+
+        deleteEntity('saved/searches', name, namespace=namespace, owner=self.owner)
+        self.assertTrue(not rest.checkResourceExists(buildEndpoint('/saved/searches/', name, namespace=namespace)))
+
+
+    def testUpdate(self):
+
+        search = getEntity('saved/searches', 'Messages by minute last 3 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
+
+        testvalue = 'test subject %s' % str(time.time())
+        search['action.email.subject'] = testvalue
+        setEntity(search)
+
+        challenge = getEntity('saved/searches', 'Messages by minute last 3 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
+
+        self.assertEqual(challenge['action.email.subject'], testvalue)
+
+
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class IndexTest(unittest.TestCase):
+
+    def setUp(self):
+        import splunk.auth as auth
+        self.sessionKey = auth.getSessionKey('admin', 'changeme')
+
+    def testListing(self):
+
+        listing = getEntities('data/indexes', sessionKey=self.sessionKey)
+        self.assertTrue('main' in listing)
+        self.assertTrue('_audit' in listing)
+        self.assertTrue('history' in listing)
+
+    def testSearchFilter(self):
+        '''
+        Test the generic ability for EAI endpoints to provide searching
+        capability
+        '''
+
+        listing = getEntities('data/indexes', sessionKey=self.sessionKey, search='audit')
+
+        self.assertTrue('_audit' in listing)
+
+    def testSingle(self):
+
+        index = getEntity('data/indexes', 'main', sessionKey=self.sessionKey)
+        self.assertTrue('homePath' in index)
+        self.assertTrue('repFactor' in index)
+
+
 if __name__ == '__main__':
-
-    import unittest
-
-    #logging.basicConfig(level=logging.DEBUG)
-
-    class EntityGettersTest(unittest.TestCase):
-
-        def testEndpointConstruct(self):
-
-            self.assertEquals(
-                buildEndpoint('myclass'),
-                '/services/myclass'
-            )
-
-            self.assertEquals(
-                buildEndpoint('my/class'),
-                '/services/my/class'
-            )
-
-            self.assertEquals(
-                buildEndpoint('my/class', 'objname'),
-                '/services/my/class/objname'
-            )
-
-            self.assertEquals(
-                buildEndpoint('my/class', namespace='virtualNS'),
-                '/servicesNS/%s/virtualNS/my/class' % EMPTY_OWNER_NAME
-            )
-
-            self.assertEquals(
-                buildEndpoint('my/class', namespace='virtualNS', owner='mildred'),
-                '/servicesNS/mildred/virtualNS/my/class'
-            )
-
-            self.assertEquals(
-                buildEndpoint('my/class', entityName='everything (*&^%%$$', namespace='virtual space NS', owner='mildred user'),
-                '/servicesNS/mildred%20user/virtual%20space%20NS/my/class/everything%20%28%2A%26%5E%25%25%24%24'
-            )
-
-    class EntityTest(unittest.TestCase):
-
-        def testConstructor(self):
-
-            x = Entity('test/path/here', 'test_name')
-
-            self.assertEquals(x.path, 'test/path/here')
-            self.assertEquals(x.name, 'test_name')
-            self.assertEquals(x.id, 'test_name')
-
-        def testContentParseString(self):
-
-            x = Entity('the/path', 'the_name', 'I am plain string')
-
-            self.assertEquals(x.value, 'I am plain string')
-            self.assertEquals(x.properties, {})
-
-
-            x = Entity('the/path', 'the_name', u"abc_\u03a0\u03a3\u03a9.txt".encode('UTF-8'))
-
-            self.assertEquals(x.value, u'abc_\u03a0\u03a3\u03a9.txt')
-            self.assertEquals(x.value, 'abc_\xce\xa0\xce\xa3\xce\xa9.txt')
-            self.assertEquals(x.properties, {})
-
-        def testContentParseDict(self):
-
-            x = Entity('the/path', 'the_name', {'a':1, 'b':u'abc_\u03a0\u03a3\u03a9.txt'.encode('UTF-8'), u'\u03a0c':3})
-
-            self.assertEquals(x.value, None)
-            self.assertEquals(x.properties, {'a':1, 'b':u'abc_\u03a0\u03a3\u03a9.txt'.encode('UTF-8'), u'\u03a0c':3})
-            self.assertEquals(x['a'], 1)
-            self.assert_('a' in x)
-            self.assertEquals(x[u'\u03a0c'], 3)
-
-    class SavedSearchTest(unittest.TestCase):
-
-        def setUp(self):
-            import splunk.auth as auth
-            self.sessionKey = auth.getSessionKey('admin', 'changeme')
-            self.owner = 'admin'
-
-        def testListing(self):
-
-            listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
-            self.assert_('Errors in the last hour' in listing)
-
-            entityList = getEntitiesList('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
-            listContainsSearch = False
-            for entity in entityList:
-                if entity.name == 'Errors in the last hour':
-                    listContainsSearch = True
-                    break
-            self.assert_(listContainsSearch)
-
-        """
-        def testFilterListing(self):
-
-            filters = {
-            'viewstate.resultView': 'reportView'
-            }
-            listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, filters=filters, owner=self.owner)
-
-            self.assert_('Messages by minute last 3 hours' in listing)
-            self.assert_('Splunk errors last 24 hours' not in listing)
-        """
-
-        def testSearchFilterListing(self):
-
-            filters = 'access_*'
-            listing = getEntities('saved/searches', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, search=filters, owner=self.owner)
-
-            self.assert_('Splunk errors last 24 hours' not in listing)
-            self.assert_('Errors in the last 24 hours' in listing)
-
-        def testSingle(self):
-
-            entity = getEntity('saved/searches', 'Errors in the last 24 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
-
-            self.assert_(isinstance(entity, Entity))
-
-            self.assertEquals(entity.name, 'Errors in the last 24 hours')
-            self.assertEquals(entity['search'], 'error OR failed OR severe OR ( sourcetype=access_* ( 404 OR 500 OR 503 ) )')
-
-
-
-        def testNonExistent(self):
-
-            self.assertRaises(splunk.ResourceNotFound, getEntity, 'whoa_nellie', self.sessionKey)
-
-        def testCreateAndDelete(self):
-
-            name = 'test_saved_search_' + str(int(time.time()))
-            string = '| search foo'
-            #namespace = 'samples'
-            #namespace = 'debug' #samples app no longer included in build, see SPL-18783
-            namespace = 'search' #apparently debug isn't either... just do it in the search app.
-
-            search = Entity('saved/searches', name, namespace=namespace, owner=self.owner)
-            search['search'] = string
-            setEntity(search)
-
-            challenge = getEntity('saved/searches', name, namespace=namespace, owner=self.owner)
-            self.assertEqual(challenge.name, name)
-            self.assertEqual(challenge.namespace, namespace)
-            self.assertEqual(challenge['search'], string)
-
-            deleteEntity('saved/searches', name, namespace=namespace, owner=self.owner)
-            self.assert_(not rest.checkResourceExists(buildEndpoint('/saved/searches/', name, namespace=namespace)))
-
-
-        def testUpdate(self):
-
-           search = getEntity('saved/searches', 'Messages by minute last 3 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
-
-           testvalue = 'test subject %s' % str(time.time())
-           search['action.email.subject'] = testvalue
-           setEntity(search)
-
-           challenge = getEntity('saved/searches', 'Messages by minute last 3 hours', namespace=splunk.getDefault('namespace'), sessionKey=self.sessionKey, owner=self.owner)
-
-           self.assertEquals(challenge['action.email.subject'], testvalue)
-
-
-    class IndexTest(unittest.TestCase):
-
-        def setUp(self):
-            import splunk.auth as auth
-            self.sessionKey = auth.getSessionKey('admin', 'changeme')
-
-        def testListing(self):
-
-            listing = getEntities('data/indexes', sessionKey=self.sessionKey)
-            self.assert_('main' in listing)
-            self.assert_('_audit' in listing)
-            self.assert_('history' in listing)
-
-        def testSearchFilter(self):
-            '''
-            Test the generic ability for EAI endpoints to provide searching
-            capability
-            '''
-
-            listing = getEntities('data/indexes', sessionKey=self.sessionKey, search='audit')
-
-            self.assert_('_audit' in listing)
-
-        def testSingle(self):
-
-            index = getEntity('data/indexes', 'main', sessionKey=self.sessionKey)
-
-            self.assert_('homePath' in index)
-            self.assert_('blockSignSize' in index)
-
-
-    class MiscTest(unittest.TestCase):
-        pass
-
-
     # exec all tests
     loader = unittest.TestLoader()
     suites = []

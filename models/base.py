@@ -92,15 +92,15 @@ class SplunkQuerySet(object):
 
         Example:
         (assume total number of jobs is 50)
+            Job = Job().set_total(50)
+            len(Job.all()) == 50
+            True
 
-        >>> len(Job.all()) == 50
-        >>> True
+            len(Job.all()[:10]) == 10
+            True
 
-        >>> len(Job.all()[:10]) == 10
-        >>> True
-
-        >>> len(Job.all()[48:60]) == 2
-        >>> True
+            len(Job.all()[48:60]) == 2
+            True
         '''
 
         # Coercing an uncached queryset obj to a list calls __len__ before
@@ -956,23 +956,27 @@ class SplunkAppObjModel(SplunkRESTModel):
         return False
 
 
+#
+# Unittests
+#
+import unittest
+import splunk.auth as auth
+
+from splunk.util import pytest_mark_skip_conditional
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class HostPathTest(unittest.TestCase):
+
+    class TestModel(SplunkAppObjModel):
+        resource = 'apps/local'
+
+    def testGetEntityWithHostPath(self):
+        '''Test getting an entity using a host_path'''
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        manager = SplunkRESTManager(self.TestModel, sessionKey=sessionKey)
+        manager.get(id='services/apps/local/search', host_path="%s://%s:%s" % (splunk.getDefault('protocol'), splunk.getDefault('host'), splunk.getDefault('port')))
+
+
 if __name__ == '__main__':
-
-    import unittest
-    import splunk.auth as auth
-
-    class HostPathTest(unittest.TestCase):
-
-        class TestModel(SplunkAppObjModel):
-            resource = 'apps/local'
-
-        def testGetEntityWithHostPath(self):
-            '''Test getting an entity using a host_path'''
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            manager = SplunkRESTManager(self.TestModel, sessionKey=sessionKey)
-            manager.get(id='services/apps/local/search', host_path="%s://%s:%s" % (splunk.getDefault('protocol'), splunk.getDefault('host'), splunk.getDefault('port')))
-
-
     # exec all tests
     loader = unittest.TestLoader()
     suites = []

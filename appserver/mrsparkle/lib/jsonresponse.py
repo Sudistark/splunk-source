@@ -67,22 +67,28 @@ class JsonResponse(object):
         else:
             self.addError(prefix + splunk.util.toDefaultStrings(e))
             
-            
 # Tests
-def unit_test():
-    j = JsonResponse()
-    j.addInfo("captain! there's an iceburg ahead!!")
-    j.addWarn("captain! we're about to hit the iceburg!")
-    j.addError("captain! our ship is sinking!")
-    j.addDebug("fatal error. ship has sunk to bottom of ocean.")
-    j.addFatal("fatal error. ship broke.")
-    j.addInfo('KivimÃ¤ki2')
-    assert j.messages[0] == {'type':'INFO', 'message':"captain! there's an iceburg ahead!!"}
-    assert j.messages[1] == {'type':'WARN', 'message':"captain! we're about to hit the iceburg!"}
-    assert j.messages[2] == {'type':'ERROR', 'message':"captain! our ship is sinking!"}
-    assert j.messages[3] == {'type':'DEBUG', 'message':"fatal error. ship has sunk to bottom of ocean."}
-    assert j.messages[4] == {'type':'FATAL', 'message':"fatal error. ship broke."}
-    assert isinstance(j.toJson(), str)
+import unittest
+class MainTest(unittest.TestCase):
+    def test_unit(self):
+        j = JsonResponse()
+        j.addInfo("captain! there's an iceburg ahead!!")
+        j.addWarn("captain! we're about to hit the iceburg!")
+        j.addError("captain! our ship is sinking!")
+        j.addDebug("fatal error. ship has sunk to bottom of ocean.")
+        j.addFatal("fatal error. ship broke.")
+        j.addInfo('KivimÃ¤ki2')
+        
+        for m in j.messages:
+            self.assertIn('time', m)
+            m.pop('time') # Popping up as don't want  to compare exact timestamp
+        self.assertEqual(j.messages[0], {'type':'INFO', 'message':"captain! there's an iceburg ahead!!"})
+        self.assertEqual(j.messages[1], {'type':'WARN', 'message':"captain! we're about to hit the iceburg!"})
+        self.assertEqual(j.messages[2], {'type':'ERROR', 'message':"captain! our ship is sinking!"})
+        self.assertEqual(j.messages[3], {'type':'DEBUG', 'message':"fatal error. ship has sunk to bottom of ocean."})
+        self.assertEqual(j.messages[4], {'type':'FATAL', 'message':"fatal error. ship broke."})
+        self.assertIsInstance(j.toJson(), str)
+
 
 if __name__ == '__main__':
-    unit_test()
+    unittest.main()

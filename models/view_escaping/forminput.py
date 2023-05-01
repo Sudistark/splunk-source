@@ -183,7 +183,7 @@ class InternalSearchInput(BaseInput):
             try:
                 self.selectFirstChoice = splunk.util.normalizeBoolean(selectFirstChoiceNode.text, enableStrictMode=True)
             except ValueError:
-                logger.warn('Invalid boolean "%s" for selectFirstChoice', self.selectFirstChoice)
+                logger.warning('Invalid boolean "%s" for selectFirstChoice', self.selectFirstChoice)
                 self.selectFirstChoice = False
 
     def extractLegacySearchFields(self, node):
@@ -387,255 +387,260 @@ class CheckboxGroupInput(MultiValueSearchInput):
     matchTagName = 'checkbox'
 
 
-if __name__ == '__main__':
-    import unittest
-    import lxml.etree as et
+import unittest
+import splunk.safe_lxml_etree as et
 
-    nodeMap = [
-        ('label', 'label'),
-        ('default', 'defaultValue'),
-        ('initialValue', 'initialValue'),
-        ('prefix', 'prefixValue'),
-        ('suffix', 'suffixValue'),
-        ('searchName', 'searchCommand'),
-        ('default', 'selected'),
-        ('valuePrefix', 'valuePrefix'),
-        ('valueSuffix', 'valueSuffix'),
-        ('delimiter', 'delimiter'),
-        ('minCount', 'minCount'),
-        ('showSelectAll', 'showSelectAll'),
-        ('showDeselectAll', 'showDeselectAll'),
-        ('width', 'width'),
-        ('allowCustomValues', 'allowCustomValues')
-    ]
+nodeMap = [
+    ('label', 'label'),
+    ('default', 'defaultValue'),
+    ('initialValue', 'initialValue'),
+    ('prefix', 'prefixValue'),
+    ('suffix', 'suffixValue'),
+    ('searchName', 'searchCommand'),
+    ('default', 'selected'),
+    ('valuePrefix', 'valuePrefix'),
+    ('valueSuffix', 'valueSuffix'),
+    ('delimiter', 'delimiter'),
+    ('minCount', 'minCount'),
+    ('showSelectAll', 'showSelectAll'),
+    ('showDeselectAll', 'showDeselectAll'),
+    ('width', 'width'),
+    ('allowCustomValues', 'allowCustomValues')
+]
 
-    class MultiValueInputTests(unittest.TestCase):
+class MultiValueInputTests(unittest.TestCase):
 
-        def testMultiSelectInput(self):
-            multiSelectInput = MultiSelectInput(dict())
+    def testMultiSelectInput(self):
+        multiSelectInput = MultiSelectInput(dict())
+        if sys.version_info[0] >=3:
+            self.assertCountEqual(nodeMap, multiSelectInput.commonNodeMap)
+        else:
             self.assertItemsEqual(nodeMap, multiSelectInput.commonNodeMap)
-            self.assertEqual("multiselect", multiSelectInput.matchTagName)
+        self.assertEqual("multiselect", multiSelectInput.matchTagName)
 
-    class CheckboxInputTests(unittest.TestCase):
+class CheckboxInputTests(unittest.TestCase):
 
-        def testCheckboxInput(self):
-            checkboxGroupInput = CheckboxGroupInput(dict())
+    def testCheckboxInput(self):
+        checkboxGroupInput = CheckboxGroupInput(dict())
+        if sys.version_info[0] >=3:
+            self.assertCountEqual(nodeMap, checkboxGroupInput.commonNodeMap)
+        else:
             self.assertItemsEqual(nodeMap, checkboxGroupInput.commonNodeMap)
-            self.assertEqual("checkbox", checkboxGroupInput.matchTagName)
+        self.assertEqual("checkbox", checkboxGroupInput.matchTagName)
 
-    class SelectFirstChoiceTests(unittest.TestCase):
-        def testParseSelectFirstChoice(self):
-            node = et.fromstring('<input type="dropdown" token="foo" />')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+class SelectFirstChoiceTests(unittest.TestCase):
+    def testParseSelectFirstChoice(self):
+        node = et.fromstring('<input type="dropdown" token="foo" />')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice>true</selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertTrue(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice>true</selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertTrue(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice>1</selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertTrue(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice>1</selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertTrue(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice>0</selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice>0</selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice>foobar</selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice>foobar</selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-            # first occurrence of <selectFirstChoice> takes precedence
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice>foobar</selectFirstChoice>'
-                                 '<selectFirstChoice>true</selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+        # first occurrence of <selectFirstChoice> takes precedence
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice>foobar</selectFirstChoice>'
+                             '<selectFirstChoice>true</selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice></selectFirstChoice>'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice></selectFirstChoice>'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-            node = et.fromstring('<input type="dropdown" token="foo">'
-                                 '<selectFirstChoice />'
-                                 '</input>')
-            item = createInput(node.attrib.get('type'), defaults=dict())
-            item.fromXml(node, 'fake')
-            self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
+        node = et.fromstring('<input type="dropdown" token="foo">'
+                             '<selectFirstChoice />'
+                             '</input>')
+        item = createInput(node.attrib.get('type'), defaults=dict())
+        item.fromXml(node, 'fake')
+        self.assertFalse(item.selectFirstChoice) # pylint: disable=E1103
 
-    class InputChangeEventHandlerTests(unittest.TestCase):
-        def testParseSimpleChangeAction(self):
-            result = createInput('text', defaults=dict())
-            result.fromXml(et.fromstring(
-                '<input type="text" token="foo">'
-                    '<change>'
-                        '<set token="foo">bar</set>'
-                    '</change>'
-                  '</input>'
-            ), sourceApp="fake")
-            self.assertEqual(result.token, 'foo')
-            self.assertEqual(len(result.inputChange), 1)
-            self.assertEqual(result.inputChange[0].value, '*')
-            self.assertEqual(result.inputChange[0].attr, 'value')
+class InputChangeEventHandlerTests(unittest.TestCase):
+    def testParseSimpleChangeAction(self):
+        result = createInput('text', defaults=dict())
+        result.fromXml(et.fromstring(
+            '<input type="text" token="foo">'
+                '<change>'
+                    '<set token="foo">bar</set>'
+                '</change>'
+              '</input>'
+        ), sourceApp="fake")
+        self.assertEqual(result.token, 'foo')
+        self.assertEqual(len(result.inputChange), 1)
+        self.assertEqual(result.inputChange[0].value, '*')
+        self.assertEqual(result.inputChange[0].attr, 'value')
 
-        def testParseConditionalChangeActions(self):
-            result = createInput('text', defaults=dict())
-            result.fromXml(et.fromstring(
-                '<input type="text" token="foo">'
-                    '<change>'
-                        '<condition value="val1">'
-                            '<set token="bar">ding</set>'
-                        '</condition>'
-                        '<condition value="val2">'
-                            '<set token="bar">ding</set>'
-                        '</condition>'
-                        '<condition label="LABEL1">'
-                            '<set token="bar">ding</set>'
-                        '</condition>'
-                    '</change>'
-                  '</input>'
-            ), sourceApp="fake")
-            self.assertEqual(result.token, 'foo')
-            self.assertEqual(len(result.inputChange), 3)
-            self.assertEqual(result.inputChange[0].attr, 'value')
-            self.assertEqual(result.inputChange[0].value, 'val1')
-            self.assertEqual(len(result.inputChange[0].actions), 1)
-            self.assertEqual(result.inputChange[0].actions[0].type, 'settoken')
-            self.assertEqual(result.inputChange[0].actions[0].name, 'bar')
-            self.assertEqual(result.inputChange[0].actions[0].template, 'ding')
-            self.assertEqual(result.inputChange[1].attr, 'value')
-            self.assertEqual(result.inputChange[1].value, 'val2')
-            self.assertEqual(len(result.inputChange[1].actions), 1)
-            self.assertEqual(result.inputChange[1].actions[0].type, 'settoken')
-            self.assertEqual(result.inputChange[2].attr, 'label')
-            self.assertEqual(result.inputChange[2].value, 'LABEL1')
-            self.assertEqual(len(result.inputChange[2].actions), 1)
-            self.assertEqual(result.inputChange[2].actions[0].type, 'settoken')
+    def testParseConditionalChangeActions(self):
+        result = createInput('text', defaults=dict())
+        result.fromXml(et.fromstring(
+            '<input type="text" token="foo">'
+                '<change>'
+                    '<condition value="val1">'
+                        '<set token="bar">ding</set>'
+                    '</condition>'
+                    '<condition value="val2">'
+                        '<set token="bar">ding</set>'
+                    '</condition>'
+                    '<condition label="LABEL1">'
+                        '<set token="bar">ding</set>'
+                    '</condition>'
+                '</change>'
+              '</input>'
+        ), sourceApp="fake")
+        self.assertEqual(result.token, 'foo')
+        self.assertEqual(len(result.inputChange), 3)
+        self.assertEqual(result.inputChange[0].attr, 'value')
+        self.assertEqual(result.inputChange[0].value, 'val1')
+        self.assertEqual(len(result.inputChange[0].actions), 1)
+        self.assertEqual(result.inputChange[0].actions[0].type, 'settoken')
+        self.assertEqual(result.inputChange[0].actions[0].name, 'bar')
+        self.assertEqual(result.inputChange[0].actions[0].template, 'ding')
+        self.assertEqual(result.inputChange[1].attr, 'value')
+        self.assertEqual(result.inputChange[1].value, 'val2')
+        self.assertEqual(len(result.inputChange[1].actions), 1)
+        self.assertEqual(result.inputChange[1].actions[0].type, 'settoken')
+        self.assertEqual(result.inputChange[2].attr, 'label')
+        self.assertEqual(result.inputChange[2].value, 'LABEL1')
+        self.assertEqual(len(result.inputChange[2].actions), 1)
+        self.assertEqual(result.inputChange[2].actions[0].type, 'settoken')
 
-    class TokenDepsTests(unittest.TestCase):
-        def testTokenDeps(self):
-            input = createInput('text', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="text" token="foo" depends="$bar$">'
-                '</input>'
-            ), sourceApp="fake")
+class TokenDepsTests(unittest.TestCase):
+    def testTokenDeps(self):
+        input = createInput('text', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="text" token="foo" depends="$bar$">'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertIsNotNone(input.tokenDeps)
-            self.assertEquals(input.tokenDeps.depends, '$bar$')
-            self.assertEquals(input.tokenDeps.rejects, '')
+        self.assertIsNotNone(input.tokenDeps)
+        self.assertEqual(input.tokenDeps.depends, '$bar$')
+        self.assertEqual(input.tokenDeps.rejects, '')
 
-    class TimeInputTests(unittest.TestCase):
-        def testTokenDeps(self):
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<earliest>-15m</earliest>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+class TimeInputTests(unittest.TestCase):
+    def testTokenDeps(self):
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<earliest>-15m</earliest>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['earliestTime'], '-15m')
-            self.assertEqual(input.selected['latestTime'], None)
+        self.assertEqual(input.selected['earliestTime'], '-15m')
+        self.assertEqual(input.selected['latestTime'], None)
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<latest>-15m</latest>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<latest>-15m</latest>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['latestTime'], '-15m')
-            self.assertEqual(input.selected['earliestTime'], None)
+        self.assertEqual(input.selected['latestTime'], '-15m')
+        self.assertEqual(input.selected['earliestTime'], None)
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<earliest>-15m</earliest>'
-                '<latest>-15m</latest>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<earliest>-15m</earliest>'
+            '<latest>-15m</latest>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['latestTime'], '-15m')
-            self.assertEqual(input.selected['earliestTime'], '-15m')
+        self.assertEqual(input.selected['latestTime'], '-15m')
+        self.assertEqual(input.selected['earliestTime'], '-15m')
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<earliestTime>-15m</earliestTime>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<earliestTime>-15m</earliestTime>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['earliestTime'], '-15m')
-            self.assertEqual(input.selected['latestTime'], None)
+        self.assertEqual(input.selected['earliestTime'], '-15m')
+        self.assertEqual(input.selected['latestTime'], None)
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<latestTime>-15m</latestTime>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<latestTime>-15m</latestTime>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['latestTime'], '-15m')
-            self.assertEqual(input.selected['earliestTime'], None)
+        self.assertEqual(input.selected['latestTime'], '-15m')
+        self.assertEqual(input.selected['earliestTime'], None)
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<latestTime>-15m</latestTime>'
-                '<earliestTime>-15m</earliestTime>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<latestTime>-15m</latestTime>'
+            '<earliestTime>-15m</earliestTime>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['latestTime'], '-15m')
-            self.assertEqual(input.selected['earliestTime'], '-15m')
+        self.assertEqual(input.selected['latestTime'], '-15m')
+        self.assertEqual(input.selected['earliestTime'], '-15m')
 
-            input = createInput('time', defaults=dict())
-            input.fromXml(et.fromstring(
-                '<input type="time" token="foo">'
-                '<default>'
-                '<latestTime>-15m</latestTime>'
-                '<earliestTime>-15m</earliestTime>'
-                '<latest>-24h</latest>'
-                '<earliest>-24h</earliest>'
-                '</default>'
-                '</input>'
-            ), sourceApp="fake")
+        input = createInput('time', defaults=dict())
+        input.fromXml(et.fromstring(
+            '<input type="time" token="foo">'
+            '<default>'
+            '<latestTime>-15m</latestTime>'
+            '<earliestTime>-15m</earliestTime>'
+            '<latest>-24h</latest>'
+            '<earliest>-24h</earliest>'
+            '</default>'
+            '</input>'
+        ), sourceApp="fake")
 
-            self.assertEqual(input.selected['latestTime'], '-24h')
-            self.assertEqual(input.selected['earliestTime'], '-24h')
-
-
+        self.assertEqual(input.selected['latestTime'], '-24h')
+        self.assertEqual(input.selected['earliestTime'], '-24h')
 
 
+
+if __name__ == "__main__":
     loader = unittest.TestLoader()
     suites = [loader.loadTestsFromTestCase(test) for test in (
         MultiValueInputTests, CheckboxInputTests, SelectFirstChoiceTests, InputChangeEventHandlerTests, TokenDepsTests, TimeInputTests

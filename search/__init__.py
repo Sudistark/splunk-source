@@ -7,9 +7,10 @@ from builtins import range
 
 import sys
 
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 import logging
 import time, datetime, copy, decimal
+from splunk.util import pytest_mark_skip_conditional
 
 import splunk
 import splunk.auth as auth
@@ -1038,7 +1039,7 @@ class SearchJob(object):
             isComplete = util.normalizeBoolean(child.get('f'))
 
             # extract timezone
-            timeOffset = child.get('ltz', 0) // 60 # data returned in seconds
+            timeOffset = int(child.get('ltz', 0)) // 60 # data returned in seconds
             tzinfo = util.TZInfo(timeOffset)
 
             # create container
@@ -1375,8 +1376,8 @@ class ResultSet(object):
         if isinstance(index, slice):
 
             # valid start: 0 < i < L; handle negative starts
-            if index.start >= L: return []
-            elif not index.start: start = 0
+            if not index.start: start = 0
+            elif index.start >= L: return []
             else: start = index.start
 
             # valid stop: i < j <= L; handle negative stops
@@ -1980,7 +1981,7 @@ class ResultFieldValue(object):
 
 class ResultsLite(object):
     def __init__(self, text):
-        import lxml.etree as et
+        import splunk.safe_lxml_etree as et
 
         self._isPreview = True
         self._fieldOrder = []
@@ -2231,1430 +2232,1450 @@ for methodName in [
 # ////////////////////////////////////////////////////////////////////////////
 # Test routines
 # ////////////////////////////////////////////////////////////////////////////
+import unittest
+import splunk.rest as rest
 
-if __name__ == '__main__':
+TEST_NAMESPACE = splunk.getDefault('namespace')
+TEST_OWNER = 'admin'
 
-    import unittest
-    import splunk.rest as rest
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class JobControlTests(unittest.TestCase):
+    '''Tests covering splunkd response to job control requests'''
 
     TEST_NAMESPACE = splunk.getDefault('namespace')
     TEST_OWNER = 'admin'
 
-    class JobControlTests(unittest.TestCase):
-        '''Tests covering splunkd response to job control requests'''
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testJobTouch(self):
+        '''Test touching a job updates its TTL.'''
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-        TEST_NAMESPACE = splunk.getDefault('namespace')
-        TEST_OWNER = 'admin'
+        job = dispatch('search non foo bar empty', sessionKey=sessionKey)
+        waitForJob(job)
 
-        def testJobTouch(self):
-            '''Test touching a job updates its TTL.'''
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        start_ttl = job.ttl
 
-            job = dispatch('search non foo bar empty', sessionKey=sessionKey)
-            waitForJob(job)
+        # Stall the ttl for 2 seconds
+        time.sleep(2)
 
-            start_ttl = job.ttl
+        aged_ttl = job.ttl
+        self.assertTrue(aged_ttl <= start_ttl)
 
-            # Stall the ttl for 2 seconds
-            time.sleep(2)
+        job.touch()
+        refreshed_ttl = job.ttl
 
-            aged_ttl = job.ttl
-            self.assert_(aged_ttl <= start_ttl)
+        self.assertTrue(refreshed_ttl >= aged_ttl)
+        job.cancel()
 
-            job.touch()
-            refreshed_ttl = job.ttl
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testJobSave(self):
+        '''Test saving a job marks it as isSaved.'''
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            self.assert_(refreshed_ttl >= aged_ttl)
+        job = dispatch('search non foo bar empty', sessionKey=sessionKey)
+        waitForJob(job)
+
+        job.save()
+        self.assertTrue(job.isSaved)
+
+        # test with namespace/owner
+        # NOTE: The save and the touch methods depend on the _execControl method which derives the uri from the atom feed itself
+        # test here is to ensure that the atom feed has the correct url.
+        job = dispatch('search non foo bar empty', sessionKey=sessionKey, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
+        waitForJob(job)
+
+        job.save()
+        self.assertTrue(job.isSaved)
+
+    def testRequestPassing(self):
+
+        job = dispatch('search NOTHING HERE1111', required_field_list='A,B,C,D', some_random_key='I LIEK PIE', earliest_time='-23d')
+
+        self.assertEqual(job.request['search'], 'search NOTHING HERE1111')
+        self.assertEqual(job.request['required_field_list'], 'A,B,C,D')
+        self.assertEqual(job.request['some_random_key'], 'I LIEK PIE')
+        self.assertEqual(job.request['earliest_time'], '-23d')
+
+        job.cancel()
+
+
+    def testTTLChange(self):
+
+        job = dispatch('search NOTHING balba da sdfq234faf')
+        waitForJob(job, 20)
+
+        ttl = 54321
+        job.setTTL(ttl)
+        job.refresh()
+        self.assertTrue(job.ttl <= ttl and job.ttl > ttl-10, 'Job TTL does not validate: actual=%s expected=%s' % (job.ttl, ttl))
+
+        self.assertRaises(ValueError, job.setTTL, None)
+        self.assertRaises(ValueError, job.setTTL, -1)
+        self.assertRaises(ValueError, job.setTTL, 'eofk3n')
+
+        job.cancel()
+
+
+    def testPriorityChange(self):
+
+        # assume that default priority is 5
+        new_priority = 3
+
+        job = dispatch('search index=_*', earliest_time='rt-30s', latest_time='rt')
+        time.sleep(1)
+
+        original_priority = job.priority
+        job.setpriority(new_priority)
+
+        if original_priority == new_priority:
             job.cancel()
+            self.fail('the new job priority is the same as the old; cannot test')
 
-        def testJobSave(self):
-            '''Test saving a job marks it as isSaved.'''
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('search non foo bar empty', sessionKey=sessionKey)
-            waitForJob(job)
-
-            job.save()
-            self.assert_(job.isSaved)
-
-            # test with namespace/owner
-            # NOTE: The save and the touch methods depend on the _execControl method which derives the uri from the atom feed itself
-            # test here is to ensure that the atom feed has the correct url.
-            job = dispatch('search non foo bar empty', sessionKey=sessionKey, namespace=TEST_NAMESPACE, owner=TEST_OWNER)
-            waitForJob(job)
-
-            job.save()
-            self.assert_(job.isSaved)
-
-        def testRequestPassing(self):
-
-            job = dispatch('search NOTHING HERE1111', required_field_list='A,B,C,D', some_random_key='I LIEK PIE', earliest_time='-23d')
-
-            self.assertEquals(job.request['search'], 'search NOTHING HERE1111')
-            self.assertEquals(job.request['required_field_list'], 'A,B,C,D')
-            self.assertEquals(job.request['some_random_key'], 'I LIEK PIE')
-            self.assertEquals(job.request['earliest_time'], '-23d')
-
-            job.cancel()
-
-
-        def testTTLChange(self):
-
-            job = dispatch('search NOTHING balba da sdfq234faf')
-            waitForJob(job, 20)
-
-            ttl = 54321
-            job.setTTL(ttl)
+        # wait for 30 seconds for priority to change values
+        for i in range(30):
             job.refresh()
-            self.assert_(job.ttl <= ttl and job.ttl > ttl-10, 'Job TTL does not validate: actual=%s expected=%s' % (job.ttl, ttl))
-
-            self.assertRaises(ValueError, job.setTTL, None)
-            self.assertRaises(ValueError, job.setTTL, -1)
-            self.assertRaises(ValueError, job.setTTL, 'eofk3n')
-
-            job.cancel()
-
-
-        def testPriorityChange(self):
-
-            # assume that default priority is 5
-            new_priority = 3
-
-            job = dispatch('search index=_*', earliest_time='rt-30s', latest_time='rt')
+            if job.priority != original_priority:
+                break
             time.sleep(1)
 
-            original_priority = job.priority
-            job.setpriority(new_priority)
 
-            if original_priority == new_priority:
-                job.cancel()
-                self.fail('the new job priority is the same as the old; cannot test')
+        try:
+            self.assertEqual(job.priority, new_priority)
 
-            # wait for 30 seconds for priority to change values
-            for i in range(30):
-                job.refresh()
-                if job.priority != original_priority:
-                    break
-                time.sleep(1)
+            self.assertRaises(ValueError, job.setpriority, None)
+            self.assertRaises(ValueError, job.setpriority, -1)
+            self.assertRaises(ValueError, job.setpriority, 11)
+            self.assertRaises(ValueError, job.setpriority, 'eofk3n')
+
+        finally:
+            job.cancel()
 
 
-            try:
-                self.assertEquals(job.priority, new_priority)
+class SearchObjectTests(unittest.TestCase):
+    '''Tests covering behavior of splunk.search object properties and methods.'''
 
-                self.assertRaises(ValueError, job.setpriority, None)
-                self.assertRaises(ValueError, job.setpriority, -1)
-                self.assertRaises(ValueError, job.setpriority, 11)
-                self.assertRaises(ValueError, job.setpriority, 'eofk3n')
-
-            finally:
-                job.cancel()
-
-
-    class SearchObjectTests(unittest.TestCase):
-        '''Tests covering behavior of splunk.search object properties and methods.'''
-
-        xslt = '''<?xml version="1.0" encoding="UTF-8"?>
-        <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-            <xsl:strip-space elements="*" />
-            <xsl:preserve-space elements="v" />
-            <xsl:output method="html" indent="no" encoding="utf-8" />
-            <xsl:template match="/">
-                <xsl:apply-templates select="v" />
-            </xsl:template>
-            <xsl:template match="v">
+    xslt = '''<?xml version="1.0" encoding="UTF-8"?>
+    <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+        <xsl:strip-space elements="*" />
+        <xsl:preserve-space elements="v" />
+        <xsl:output method="html" indent="no" encoding="utf-8" />
+        <xsl:template match="/">
+            <xsl:apply-templates select="v" />
+        </xsl:template>
+        <xsl:template match="v">
+            <xsl:apply-templates />
+        </xsl:template>
+        <xsl:template match="sg">
+            <em>
+                <xsl:attribute name="class">
+                    <xsl:text>t</xsl:text>
+                    <xsl:if test="@h">
+                        <xsl:text> a</xsl:text>
+                    </xsl:if>
+                </xsl:attribute>
                 <xsl:apply-templates />
-            </xsl:template>
-            <xsl:template match="sg">
-                <em>
-                    <xsl:attribute name="class">
-                        <xsl:text>t</xsl:text>
-                        <xsl:if test="@h">
-                            <xsl:text> a</xsl:text>
-                        </xsl:if>
-                    </xsl:attribute>
-                    <xsl:apply-templates />
-                </em>
-            </xsl:template>
-        </xsl:stylesheet>
+            </em>
+        </xsl:template>
+    </xsl:stylesheet>
+    '''
+
+    def testAaRawEvent(self):
+        '''
+        test the parsing in raw XML
         '''
 
-        def testAaRawEvent(self):
-            '''
-            test the parsing in raw XML
-            '''
+        xml = '''<v xml:space="preserve" trunc="0">2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl <sg>added=0</sg> deleted=0 <sg h="1">changed=8</sg> user=kim@kim-laptop revision=40 changetype=edit isTruncated=False</v>'''
 
-            xml = '''<v xml:space="preserve" trunc="0">2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl <sg>added=0</sg> deleted=0 <sg h="1">changed=8</sg> user=kim@kim-laptop revision=40 changetype=edit isTruncated=False</v>'''
+        rawtext = '2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl added=0 deleted=0 changed=8 user=kim@kim-laptop revision=40 changetype=edit isTruncated=False'
 
-            rawtext = '2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl added=0 deleted=0 changed=8 user=kim@kim-laptop revision=40 changetype=edit isTruncated=False'
+        xmltransform = '''2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl <em class="t">added=0</em> deleted=0 <em class="t a">changed=8</em> user=kim@kim-laptop revision=40 changetype=edit isTruncated=False'''
 
-            xmltransform = '''2008/09/24 19:28:27  changelist=42331 filePath=//splunk/cm/winbuild.pl <em class="t">added=0</em> deleted=0 <em class="t a">changed=8</em> user=kim@kim-laptop revision=40 changetype=edit isTruncated=False'''
+        node = et.fromstring(xml.encode())
+        r = RawEvent()
+        r.fromXml(node)
+        self.assertEqual(str(r), rawtext)
+        self.assertEqual(len(r), len(rawtext))
+        self.assertEqual(r[0], rawtext[0])
+        self.assertEqual(r[5:10], rawtext[5:10])
+        self.assertEqual(r.toXml(xslt=util.toUTF8(self.xslt)), xmltransform)
+        self.assertEqual(r.isTruncated, False)
 
-            node = et.fromstring(xml)
-            r = RawEvent()
-            r.fromXml(node)
-            self.assertEqual(str(r), rawtext)
-            self.assertEqual(len(r), len(rawtext))
-            self.assertEqual(r[0], rawtext[0])
-            self.assertEqual(r[5:10], rawtext[5:10])
-            self.assertEqual(r.toXml(xslt=self.xslt), xmltransform)
-            self.assertEqual(r.isTruncated, False)
 
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testNoRawEvent(self):
+        '''
+        test handling cases when _raw is absent
+        '''
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('| windbag | head 10 | fields - _raw', sessionKey=sessionKey)
 
-        def testNoRawEvent(self):
-            '''
-            test handling cases when _raw is absent
-            '''
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = dispatch('| windbag | head 10 | fields - _raw', sessionKey=sessionKey)
+        waitForJob(job)
 
-            waitForJob(job)
+        r = job.results[0]
 
-            r = job.results[0]
+        self.assertEqual(r.raw.getRaw(), '')
+        self.assertEqual(r.raw.getRaw().__len__(), 0)
 
-            self.assertEquals(r.raw.getRaw(), '')
-            self.assertEquals(r.raw.getRaw().__len__(), 0)
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchRaw(self):
 
-        def testSearchRaw(self):
+        expectedRaw = util.unicode('''2008-10-20T14:29:22 POSITION 0 lang=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" \'single quotes\' \\slashes\\ `~!@#$%^&*()-_=+{}|;:<>,./? [brackets] <script>alert("raw event unescaped!")</script>''')
 
-            expectedRaw = u'''2008-10-20T14:29:22 POSITION 0 lang=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" \'single quotes\' \\slashes\\ `~!@#$%^&*()-_=+{}|;:<>,./? [brackets] <script>alert("raw event unescaped!")</script>'''
+        expectedXml = util.unicode('''<v xml:space="preserve" trunc="0">2008-10-20T14:29:22 POSITION 0 <sg h="1">lang</sg>=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" 'single quotes' \slashes\ `~!@#$%^&amp;*()-_=+{}|;:&lt;&gt;,./? [<sg h="1">brackets</sg>] &lt;script&gt;alert("raw event unescaped!")&lt;/script&gt;</v>''')
 
-            expectedXml = u'''<v xml:space="preserve" trunc="0">2008-10-20T14:29:22 POSITION 0 <sg h="1">lang</sg>=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" 'single quotes' \slashes\ `~!@#$%^&amp;*()-_=+{}|;:&lt;&gt;,./? [<sg h="1">brackets</sg>] &lt;script&gt;alert("raw event unescaped!")&lt;/script&gt;</v>'''
+        expectedXMLTransform = util.unicode('''2008-10-20T14:29:22 POSITION 0 <em class="t a">lang</em>=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" 'single quotes' \slashes\ `~!@#$%^&amp;*()-_=+{}|;:&lt;&gt;,./? [<em class="t a">brackets</em>] &lt;script&gt;alert("raw event unescaped!")&lt;/script&gt;''')
 
-            expectedXMLTransform = u'''2008-10-20T14:29:22 POSITION 0 <em class="t a">lang</em>=Albanian sample="Unë mund të ha qelq dhe nuk më gjen gjë." constant="double quotes" 'single quotes' \slashes\ `~!@#$%^&amp;*()-_=+{}|;:&lt;&gt;,./? [<em class="t a">brackets</em>] &lt;script&gt;alert("raw event unescaped!")&lt;/script&gt;'''
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('windbag rowcount=5 basetime=1224538162 | search lang OR brackets', sessionKey=sessionKey)
 
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = dispatch('windbag rowcount=5 basetime=1224538162 | search lang OR brackets', sessionKey=sessionKey)
+        waitForJob(job)
+        
+        r = job.results[0]
+        self.assertEqual(r.raw.getRaw(), expectedRaw)
+        self.assertEqual(str(r), expectedRaw)
+        self.assertEqual(util.toDefaultStrings(r.raw), expectedRaw)
+        self.assertEqual(util.toDefaultStrings(r.raw.toXml()), expectedXml)
+        self.assertEqual(r.raw.toXml(xslt=util.toUTF8(self.xslt)), expectedXMLTransform)
+        self.assertEqual(r.raw.isTruncated, False)
 
-            waitForJob(job)
 
-            r = job.results[0]
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultSlicing(self):
+        '''
+        Test the dispatcher's ability to merge results from split data files;
+        see SPL-12146
+        '''
 
-            self.assertEquals(r.raw.getRaw(), expectedRaw)
-            self.assertEquals(str(r), expectedRaw)
-            self.assertEquals(r.raw.decode('utf-8'), expectedRaw)
-            self.assertEquals(r.raw.toXml(), expectedXml)
-            self.assertEquals(r.raw.toXml(xslt=self.xslt), expectedXMLTransform)
-            self.assertEquals(r.raw.isTruncated, False)
+        rowCount = 500
 
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-        def testResultSlicing(self):
-            '''
-            Test the dispatcher's ability to merge results from split data files;
-            see SPL-12146
-            '''
+        job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey, status_buckets=1)
 
-            rowCount = 500
+        waitForJob(job)
 
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        self.assertEqual(job.count, rowCount)
 
-            job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey, status_buckets=1)
+        s = job.events[0:100]
+        self.assertEqual(len(s), 100)
 
-            waitForJob(job)
+        s = job.events[0:rowCount]
+        self.assertEqual(len(s), rowCount)
 
-            self.assertEqual(job.count, rowCount)
+        s = job.events[0:12342]
+        self.assertEqual(len(s), rowCount)
 
-            s = job.events[0:100]
-            self.assertEqual(len(s), 100)
+        s = job.events[0:50]
+        self.assertEqual(len(s), 50)
 
-            s = job.events[0:rowCount]
-            self.assertEqual(len(s), rowCount)
+        s = job.events[12:76]
+        self.assertEqual(len(s), 64)
 
-            s = job.events[0:12342]
-            self.assertEqual(len(s), rowCount)
+        s = job.events[76:12]
+        self.assertEqual(len(s), 0)
 
-            s = job.events[0:50]
-            self.assertEqual(len(s), 50)
+        s = job.events[52:52]
+        self.assertEqual(len(s), 0)
 
-            s = job.events[12:76]
-            self.assertEqual(len(s), 64)
+        s = job.events[0:]
+        self.assertEqual(len(s), rowCount)
 
-            s = job.events[76:12]
-            self.assertEqual(len(s), 0)
+        s = job.events[:]
+        self.assertEqual(len(s), rowCount)
 
-            s = job.events[52:52]
-            self.assertEqual(len(s), 0)
+        s = job.events[:-73]
+        self.assertEqual(len(s), 427)
 
-            s = job.events[0:]
-            self.assertEqual(len(s), rowCount)
+        s = job.events[:-600]
+        self.assertEqual(len(s), 0, 'failed on [:-600]')
 
-            s = job.events[:]
-            self.assertEqual(len(s), rowCount)
 
-            s = job.events[:-73]
-            self.assertEqual(len(s), 427)
+        s = job.events[-1:]
+        self.assertEqual(len(s), 1)
 
-            s = job.events[:-600]
-            self.assertEqual(len(s), 0, 'failed on [:-600]')
+        s = job.events[-499:]
+        self.assertEqual(len(s), 499)
 
+        s = job.events[-500:]
+        self.assertEqual(len(s), 500)
 
-            s = job.events[-1:]
-            self.assertEqual(len(s), 1)
+        s = job.events[-501:]
+        self.assertEqual(len(s), 500)
 
-            s = job.events[-499:]
-            self.assertEqual(len(s), 499)
+        s = job.events[-1:-2]
+        self.assertEqual(len(s), 0)
 
-            s = job.events[-500:]
-            self.assertEqual(len(s), 500)
+        s = job.events[-2:-1]
+        self.assertEqual(len(s), 1)
 
-            s = job.events[-501:]
-            self.assertEqual(len(s), 500)
+        s = job.events[-1:-1]
+        self.assertEqual(len(s), 0)
 
-            s = job.events[-1:-2]
-            self.assertEqual(len(s), 0)
+        s = job.events[-345:-234]
+        self.assertEqual(len(s), 111)
 
-            s = job.events[-2:-1]
-            self.assertEqual(len(s), 1)
+        s = job.events[-9999:-9999]
+        self.assertEqual(len(s), 0)
 
-            s = job.events[-1:-1]
-            self.assertEqual(len(s), 0)
 
-            s = job.events[-345:-234]
-            self.assertEqual(len(s), 111)
+        s = job.events[-1]
+        self.assertEqual(int(str(s['position'])), 499, 'failed on [-1]')
 
-            s = job.events[-9999:-9999]
-            self.assertEqual(len(s), 0)
+        s = job.events[0]
+        self.assertEqual(int(str(s['position'])), 0, 'failed on [0]')
 
+        s = job.events[1]
+        self.assertEqual(int(str(s['position'])), 1, 'failed on [1]')
 
-            s = job.events[-1]
-            self.assertEqual(int(str(s['position'])), 499, 'failed on [-1]')
+        s = job.events[499]
+        self.assertEqual(int(str(s['position'])), 499, 'failed on [499]')
 
-            s = job.events[0]
-            self.assertEqual(int(str(s['position'])), 0, 'failed on [0]')
+        self.assertRaises(IndexError, job.__getitem__, 500)
 
-            s = job.events[1]
-            self.assertEqual(int(str(s['position'])), 1, 'failed on [1]')
+        job.cancel()
 
-            s = job.events[499]
-            self.assertEqual(int(str(s['position'])), 499, 'failed on [499]')
+    # can't appropriately test waitForRunning mode in a unit test infrastructure
+    # def testWaitForRunning(self):
+    #         # get session key
+    #     sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            self.assertRaises(IndexError, job.__getitem__, 500)
+    #     job = dispatch('windbag', sessionKey=sessionKey)
+    #     self.assertTrue(job.waitForRunning, True)
+    #     self.assertEqual(job.dispatchState, 'RUNNING')
 
-            job.cancel()
+    #     job = getJob(job.sid, sessionKey=sessionKey)
+    #     self.assertTrue(job.waitForRunning, True)
+    #     self.assertEqual(job.dispatchState, 'RUNNING')
 
-        def testWaitForRunning(self):
-             # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        # can't appropriately test waitForRunning==False mode in a unit test infrastructure
 
-            job = dispatch('windbag', sessionKey=sessionKey)
-            self.assertTrue(job.waitForRunning, True)
-            self.assertEqual(job.dispatchState, 'RUNNING')
+    def testTimelineObject(self):
 
-            job = getJob(job.sid, sessionKey=sessionKey)
-            self.assertTrue(job.waitForRunning, True)
-            self.assertEqual(job.dispatchState, 'RUNNING')
+        # test default population of latestTime, given a start and duration
+        t = TimeContainer(earliestTime=1199145600, duration=62)
+        self.assertEqual(t.latestTime, datetime.datetime(2008, 1, 1, 0, 1, 2, 0, util.utc))
+        self.assertEqual(t.duration, datetime.timedelta(seconds=62))
 
-            # can't appropriately test waitForRunning==False mode in a unit test infrastructure
+        # test default population of earliestTime, given a end and duration
+        t = TimeContainer(latestTime=1199145662, duration=62)
+        self.assertEqual(t.earliestTime, datetime.datetime(2008, 1, 1, 0, 0, 0, 0, util.utc))
 
-        def testTimelineObject(self):
+        # test default population of duration, given a start and end
+        t = TimeContainer(earliestTime=1199145600, latestTime=1199145675)
+        self.assertEqual(t.duration, datetime.timedelta(seconds=75))
 
-            # test default population of latestTime, given a start and duration
-            t = TimeContainer(earliestTime=1199145600, duration=62)
-            self.assertEquals(t.latestTime, datetime.datetime(2008, 1, 1, 0, 1, 2, 0, util.utc))
-            self.assertEquals(t.duration, datetime.timedelta(seconds=62))
+        # test default population of duration, given a start and end and extra duration
+        t = TimeContainer(earliestTime=1199145600, latestTime=1199145675, duration=12)
+        self.assertEqual(t.duration, datetime.timedelta(seconds=75))
 
-            # test default population of earliestTime, given a end and duration
-            t = TimeContainer(latestTime=1199145662, duration=62)
-            self.assertEquals(t.earliestTime, datetime.datetime(2008, 1, 1, 0, 0, 0, 0, util.utc))
 
-            # test default population of duration, given a start and end
-            t = TimeContainer(earliestTime=1199145600, latestTime=1199145675)
-            self.assertEquals(t.duration, datetime.timedelta(seconds=75))
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultProperties(self):
 
-            # test default population of duration, given a start and end and extra duration
-            t = TimeContainer(earliestTime=1199145600, latestTime=1199145675, duration=12)
-            self.assertEquals(t.duration, datetime.timedelta(seconds=75))
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
+        job = dispatch('windbag', sessionKey=sessionKey)
 
-        def testResultProperties(self):
+        waitForJob(job)
 
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        for i, v in enumerate(job.events):
+            self.assertEqual(v.raw, v['_raw'])
+            self.assertEqual(v.time, v['_time'][0].value)
+            self.assertEqual(v.offset, i)
 
-            job = dispatch('windbag', sessionKey=sessionKey)
+            for k in v.fields:
+                self.assertEqual(v[k], v.fields[k])
 
-            waitForJob(job)
+        job.cancel()
 
-            for i, v in enumerate(job.events):
-                self.assertEquals(v.raw, v['_raw'])
-                self.assertEquals(v.time, v['_time'][0].value)
-                self.assertEquals(v.offset, i)
 
-                for k in v.fields:
-                    self.assertEquals(v[k], v.fields[k])
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testEventOptions(self):
 
-            job.cancel()
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
+        # handle QuotaExceededException by waiting
+        j = 10
+        while j > -1:
+            j -= 1
+            try:
+                job = dispatch('windbag', sessionKey=sessionKey)
+            except splunk.QuotaExceededException as e:
+                time.sleep(5) # wait for some searches to complete
+                if j == 0:
+                    raise e
+                else:
+                    pass
 
-        def testEventOptions(self):
+        waitForJob(job)
 
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        # check that fieldList accepts both list() and string()
+        job.setFetchOptions(fieldList='A,B,C')
+        self.assertEqual(job.getFetchOptions()['field_list'], 'A,B,C')
+        job.setFetchOptions(fieldList=['A', 'B', 'C'])
+        self.assertEqual(job.getFetchOptions()['field_list'], ['A', 'B', 'C'])
 
-            # handle QuotaExceededException by waiting
-            j = 10
-            while j > -1:
-               j -= 1
-               try:
-                  job = dispatch('windbag', sessionKey=sessionKey)
-               except splunk.QuotaExceededException as e:
-                  time.sleep(5) # wait for some searches to complete
-                  if j == 0:
-                     raise e
-                  else:
-                     pass
+        # restrict fields to 1 field
+        job.setFetchOption(fieldList=['position'])
+        for i, x in enumerate(job.events):
+            self.assertEqual(len(x.fields), 1)
+            self.assertEqual(str(x['position']), str(i))
 
-            waitForJob(job)
+        # restrict fields to 3 fields
+        job.setFetchOption(fieldList=['_time', 'position', '_raw'])
+        for i, x in enumerate(job.events):
+            self.assertEqual(len(x.fields), 3)
+            self.assertEqual(str(x['position']), str(i))
 
-            # check that fieldList accepts both list() and string()
-            job.setFetchOptions(fieldList='A,B,C')
-            self.assertEquals(job.getFetchOptions()['field_list'], 'A,B,C')
-            job.setFetchOptions(fieldList=['A', 'B', 'C'])
-            self.assertEquals(job.getFetchOptions()['field_list'], ['A', 'B', 'C'])
+        job.cancel()
 
-            # restrict fields to 1 field
-            job.setFetchOption(fieldList=['position'])
-            for i, x in enumerate(job.events):
-                self.assertEquals(len(x.fields), 1)
-                self.assertEquals(str(x['position']), str(i))
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testHostPath(self):
 
-            # restrict fields to 3 fields
-            job.setFetchOption(fieldList=['_time', 'position', '_raw'])
-            for i, x in enumerate(job.events):
-                self.assertEquals(len(x.fields), 3)
-                self.assertEquals(str(x['position']), str(i))
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            job.cancel()
+        job = dispatch('windbag', hostPath=splunk.mergeHostPath())
 
-        def testHostPath(self):
+        job.cancel()
 
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            job = dispatch('windbag', hostPath=splunk.mergeHostPath())
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testDispatchTimeHandling(self):
 
-            job.cancel()
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
+        job = dispatch('search non foo bar empty')
+        self.assertEqual(job.dispatchArgs.get('earliest_time'), None)
+        self.assertEqual(job.dispatchArgs.get('latest_time'), None)
+        job.cancel()
 
-        def testDispatchTimeHandling(self):
+        job = dispatch('search non foo bar empty', earliestTime=time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0)))
+        self.assertEqual(job.dispatchArgs.get('earliest_time'), '2008-09-26T21:49:50-0700')
+        self.assertEqual(job.dispatchArgs.get('latest_time'), None)
+        self.assertEqual(job.dispatchArgs.get('time_format'), util.ISO_8601_STRFTIME)
+        job.cancel()
 
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('search non foo bar empty', earliestTime=1222470138.127239)
+        self.assertEqual(job.dispatchArgs.get('earliest_time'), 1222470138.127239)
+        self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
+        job.cancel()
 
-            job = dispatch('search non foo bar empty')
-            self.assertEqual(job.dispatchArgs.get('earliest_time'), None)
-            self.assertEqual(job.dispatchArgs.get('latest_time'), None)
-            job.cancel()
+        job = dispatch('search non foo bar empty', latestTime=1222470138.127239)
+        self.assertEqual(job.dispatchArgs.get('latest_time'), 1222470138.127239)
+        self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
+        job.cancel()
 
-            job = dispatch('search non foo bar empty', earliestTime=time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0)))
-            self.assertEqual(job.dispatchArgs.get('earliest_time'), '2008-09-26T21:49:50-0700')
-            self.assertEqual(job.dispatchArgs.get('latest_time'), None)
-            self.assertEqual(job.dispatchArgs.get('time_format'), util.ISO_8601_STRFTIME)
-            job.cancel()
+        job = dispatch('search non foo bar empty', earliestTime=1222470138.127239, latestTime=1222472317.413522)
+        self.assertEqual(job.dispatchArgs.get('earliest_time'), 1222470138.127239)
+        self.assertEqual(job.dispatchArgs.get('latest_time'), 1222472317.413522)
+        self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
+        job.cancel()
 
-            job = dispatch('search non foo bar empty', earliestTime=1222470138.127239)
-            self.assertEqual(job.dispatchArgs.get('earliest_time'), 1222470138.127239)
-            self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
-            job.cancel()
+        self.assertRaises(TypeError,
+            dispatch,
+            'search non foo bar empty',
+            earliestTime=1222470138.127239,
+            latestTime=time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0))
+        )
 
-            job = dispatch('search non foo bar empty', latestTime=1222470138.127239)
-            self.assertEqual(job.dispatchArgs.get('latest_time'), 1222470138.127239)
-            self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
-            job.cancel()
 
-            job = dispatch('search non foo bar empty', earliestTime=1222470138.127239, latestTime=1222472317.413522)
-            self.assertEqual(job.dispatchArgs.get('earliest_time'), 1222470138.127239)
-            self.assertEqual(job.dispatchArgs.get('latest_time'), 1222472317.413522)
-            self.assertEqual(job.dispatchArgs.get('time_format'), '%s')
-            job.cancel()
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testDispatchArgAsList(self):
+        '''
+        Test the ability for the dispatch method to auto-handle arguments
+        passed in as a list; all lists are normalized by fieldListToString
+        '''
 
-            self.assertRaises(TypeError,
-                dispatch,
-                'search non foo bar empty',
-                earliestTime=1222470138.127239,
-                latestTime=time.struct_time((2008, 9, 26, 21, 49, 50, 4, 270, 0))
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        s = 'search 23faef2f3 dfae9fa'
+        job = dispatch(s, required_field_list=['A', 'B', 'C'], sessionKey=sessionKey)
+        self.assertEqual(job.search, s)
+        job.cancel()
+
+        job = dispatch(s, required_field_list='X,Y,Z', sessionKey=sessionKey)
+        self.assertEqual(job.search, s)
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testDispatchArgNormalization(self):
+        '''
+        Tests the normalization of property aliases, to prevent overlap
+        '''
+
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('windbag', sessionKey=sessionKey)
+
+        # first try to set every aliased option and check that they are mapped
+        job.setFetchOptions(**DEFAULT_RESULT_ARG_MAP)
+        setOptions = job.getFetchOptions()
+        for k in DEFAULT_RESULT_ARG_MAP:
+            self.assertTrue(k not in setOptions)
+
+        # now try double assigment
+        job.setFetchOptions(field_list='directWay')
+        job.setFetchOptions(fieldList='aliasWay')
+        setOptions = job.getFetchOptions()
+        self.assertTrue('fieldList' not in setOptions)
+        self.assertEqual(setOptions['field_list'], 'aliasWay')
+
+        # and the other way
+        job.setFetchOptions(fieldList='aliasWay')
+        job.setFetchOptions(field_list='directWay')
+        setOptions = job.getFetchOptions()
+        self.assertTrue('fieldList' not in setOptions)
+        self.assertEqual(setOptions['field_list'], 'directWay')
+
+        job.cancel()
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testToJsonable(self):
+        '''
+        Tests the primitive serializer
+        '''
+
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('windbag', sessionKey=sessionKey)
+        waitForJob(job)
+
+        # try with default time handling
+
+        prim = job.toJsonable()
+        self.assertEqual(prim['eventSearch'].strip(), 'windbag')
+        self.assertEqual(prim['isDone'], True)
+        self.assertEqual(prim['reportSearch'], None)
+
+        try:
+            import json
+            json.dumps(prim)
+        except ImportError:
+            pass
+
+        # try with unix time format
+
+        prim = job.toJsonable(timeFormat='unix')
+        self.assertEqual(prim['eventSearch'].strip(), 'windbag')
+        self.assertEqual(prim['isDone'], True)
+        self.assertEqual(prim['reportSearch'], None)
+
+        try:
+            import json
+            json.dumps(prim)
+        except ImportError:
+            pass
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testToJsonableLongRunning(self):
+        '''
+        Tests the primitive serializer while the job is still running
+        '''
+
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+        job = dispatch('search *', sessionKey=sessionKey)
+
+        for i in range(5):
+            prim = job.toJsonable()
+            self.assertNotEqual(prim['sid'], None)
+            time.sleep(2)
+
+        job.cancel()
+
+
+class SearchResultTests(unittest.TestCase):
+    '''Tests covering splunkd responses to dispatch requests'''
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testAWindbag(self):
+        '''
+        Generate known dummy data to check for consistency
+        '''
+
+        rowCount = 18
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey)
+
+        self.assertTrue(job.isStreaming, 'job is expected to be streaming; marked as non-streaming')
+        self.assertTrue(not job.isFinalized, 'job is expected to not be finalized')
+
+        for i, event in enumerate(job.events):
+            self.assertEqual(int(str(event['position'])), i)
+            for field in event:
+                self.assertNotEqual(event[field], None)
+
+        self.assertEqual(job.count, rowCount)
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchInitialSetupDelay(self):
+        '''
+        Upon first executing a search, any of the result endpoints must return
+        an HTTP 204 while it is still preparing results;  the SearchJob should
+        block on access while this is still occuring and not blow up.
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        job = dispatch('search *', sessionKey=sessionKey)
+
+        self.assertTrue(job.createTime)
+
+        events = None
+        runaway = 0
+        while not events and runaway < 20:
+            events = job[1:5]
+            if job.isDone: break
+            time.sleep(.5)
+            runaway += 1
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchSpanningFiles(self):
+        '''
+        Test the dispatcher's ability to merge results from split data files;
+        see SPL-12146
+        '''
+
+        rowCount = 2000
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey)
+
+        for i, event in enumerate(job.events):
+            self.assertEqual(int(str(event['position'])), i)
+
+        self.assertEqual(job.count, rowCount)
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def xxtestNonStreamingBlocking(self):
+        '''
+        DISABLED: need to do convert windbag to streaming
+        Test the iterator on non-streaming results
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        job = dispatch('windbag delay=3 | timechart count', sessionKey=sessionKey)
+
+        # check that access to result row is blocked while search is still prepping
+        self.assertRaises(IndexError, job.__getitem__, 1)
+
+        # check that search is not allowing access to result item
+        # before job is done; raw event access should be okay though
+        while job.count < 2:
+            time.sleep(.5)
+        self.assertRaises(splunk.SplunkdException, job.__getitem__, 1)
+        self.assertTrue(job.events[0])
+
+        # check that convenience accessor on job object points to 'results'
+        waitForJob(job)
+        self.assertEqual(job[0]['count'], job.results[0]['count'], 'SearchJob index getter is pointed to wrong event set')
+
+        job.cancel()
+
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testTimelinePopulation(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        basetime = 1120201200.0
+        interval = 1
+        expectedBucketCount = 100
+        localtz = util.TZInfo(-7*60, '')
+
+
+        job = dispatch('windbag basetime=%s interval=%s' % (basetime, interval), sessionKey=sessionKey, status_buckets=250)
+
+        waitForJob(job)
+
+        self.assertEqual(len(job.timeline), len(job.timeline.buckets))
+        self.assertEqual(len(job.timeline), expectedBucketCount)
+
+        # check that the last bucket time is the same as the interval
+        # specified in the search string
+        self.assertEqual(
+            datetime.datetime.fromtimestamp(basetime, localtz),
+            job.timeline[-1].earliestTime)
+
+        # TODO: resolve the timezone info
+        firstBucketTime = datetime.datetime.fromtimestamp(basetime - interval * (expectedBucketCount - 1), localtz)
+        if job.timeline.cursorTime:
+            self.assertTrue(job.timeline.cursorTime < firstBucketTime, 'cursorTime is not earlier than first bucket time')
+
+        for i, x in enumerate(job.timeline):
+            self.assertEqual(
+                x.earliestTime,
+                datetime.datetime.fromtimestamp(basetime - interval * (expectedBucketCount - (i + 1)), localtz))
+            self.assertEqual(x.itemCount, 1)
+            self.assertEqual(x.duration, datetime.timedelta(seconds=1))
+            self.assertTrue(x.isComplete, 'bucket is not finalized')
+
+
+        self.assertEqual(job.timeline.isComplete, True)
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSummary(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        basetime = 1205967600
+        job = dispatch('windbag basetime=%s interval=1' % basetime, sessionKey=sessionKey, status_buckets=1)
+
+        waitForJob(job)
+
+        self.assertEqual(job.summary.latestTime, None)
+        self.assertEqual(job.summary.earliestTime, None)
+        self.assertEqual(job.summary.count, 100)
+
+        for fieldName in job.summary.fields:
+            self.assertEqual(job.summary.fields[fieldName]['isExact'], True)
+
+        f = job.summary.fields
+
+        self.assertEqual(f['position']['count'], 100)
+        self.assertEqual(f['position']['distinctCount'], 100)
+        self.assertEqual(f['position']['numericCount'], 100)
+        self.assertEqual(f['position']['min'], 0)
+        self.assertEqual(f['position']['max'], 99)
+
+        self.assertEqual(f['source']['modes'][0]['value'], 'SpaceOdyssey')
+        self.assertEqual(f['source']['modes'][0]['count'], 100)
+        self.assertEqual(f['source']['modes'][0]['isExact'], True)
+
+        job.cancel()
+
+        # summary fetch options
+        job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1)
+        waitForJob(job)
+        job.setFetchOption(summary=dict(search="fancy"))
+        self.assertEqual(len(job.summary.fields), 1)
+        job.cancel()
+
+        job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
+        waitForJob(job)
+        job.setFetchOption(summary=dict(min_freq=".99"))
+        self.assertEqual(len(job.summary.fields), 10)
+        job.cancel()
+
+        job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
+        waitForJob(job)
+        job.setFetchOption(summary=dict(min_freq=".5", search="source"))
+        self.assertEqual(len(job.summary.fields), 2)
+        job.cancel()
+
+        job = dispatch('windbag', sessionKey=sessionKey, status_buckets=0, required_field_list='*')
+        waitForJob(job)
+        job.setFetchOption(summary=dict(min_freq=".5", search="source"))
+        self.assertEqual(len(job.summary.fields), 0)
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def XXtestMaxLines(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        job = dispatch('windbag multiline=true fieldcount=100', sessionKey=sessionKey)
+
+        waitForJob(job)
+
+        job.setFetchOption(maxLines=12)
+
+        # the windbag operator has a bunch of default fields that exist; we pad by 4
+        self.assertEqual(job.events[0].raw.strip().count('\n') + 1, 16)
+
+        job.cancel()
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testFeedEvent(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        rowcount = 200
+
+        job = dispatch('| windbag rowcount=%s | fields *' % rowcount, sessionKey=sessionKey, status_buckets=1)
+
+        waitForJob(job)
+
+        # check that XML is valid
+        feed = job.getFeed('events', outputMode='xml')
+        et.fromstring(feed)
+
+        # now get JSON format so we can do quick parse
+        feed = job.getFeed(mode='events', outputMode='json', count=rowcount)
+        feed = json.loads(feed)
+        feedResults = feed['results']
+
+        self.assertEqual(len(feedResults), rowcount)
+
+        for i, x in enumerate(feedResults):
+            self.assertEqual(int(str(x['position'])), i)
+
+        #
+        # check that passed params are recognized
+        #
+        offset = 12
+        count = 5
+        job.setFetchOption(count=count, offset=offset)
+        feed = job.getFeed(mode='events', outputMode='json')
+        feed = json.loads(feed)
+        feedResults = feed['results']
+
+        self.assertEqual(len(feedResults), count)
+
+        for i in range(offset, offset + count - 1):
+            self.assertEqual(int(feedResults[i - offset]['position']), i)
+
+        #
+        # check that event and results feeds are the same
+        #
+        job.setFetchOption(count=5, offset=0, outputMode='xml')
+        self.assertEqual(job.getFeed('events'), job.getFeed('results'))
+
+        job.cancel()
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testFeedCount(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        rowcount = 228
+
+        job = dispatch('windbag rowcount=%s' % rowcount, sessionKey=sessionKey)
+
+        waitForJob(job)
+
+        job.setFetchOption(outputMode='json')
+
+        # check that the default count=100
+        feed = job.getFeed('results')
+        feed = json.loads(feed)
+        feedResults = feed['results']
+        self.assertEqual(len(feedResults), 100)
+
+        # check that count is respected
+        job.setFetchOption(count=124)
+        feed = job.getFeed('results')
+        feed = json.loads(feed)
+        feedResults = feed['results']
+        self.assertEqual(len(feedResults), 124)
+
+        # check that count=0 returns all
+        job.setFetchOption(count=0)
+        feed = job.getFeed('results')
+        feed = json.loads(feed)
+        feedResults = feed['results']
+        self.assertEqual(len(feedResults), rowcount)
+
+        job.cancel()
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchAll(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        data = searchAll('windbag rowcount=100', status_buckets=1)
+
+        for i, x in enumerate(data):
+            self.assertEqual(int(str(x['position'])), i)
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchOne(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        data = searchOne('windbag rowcount=100', status_buckets=1)
+        self.assertTrue(isinstance(data, Result))
+
+        #self.assertEqual(str(data), expectedResult)
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testSearchCount(self):
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        rowcount = 321
+        data = searchCount('windbag rowcount=%s' % rowcount)
+
+        self.assertEqual(data, rowcount)
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def XXXtestShowEmptyFields(self):
+        '''
+        disabling this test: the empty field request behavior that is
+        expected in this test has not been true for a while, as the backend
+        will only display fields that exist somewhere in the dataset;
+        am unable to find the SPL trail
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        # first check if empty fields is on (by default)
+        job = dispatch('windbag rowcount=10', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
+
+        waitForJob(job)
+
+        # check that non-existent requested fields show up
+        job.setFetchOption(field_list=['host', 'source', 'sourcetype', 'cola'])
+        self.assertTrue(job.getFetchOptions()['show_empty_fields'])
+        self.assertTrue('host' in job.events.fieldOrder, 'host field is missing in field order')
+        self.assertTrue('source' in job.events.fieldOrder, 'source field is missing in field order')
+        self.assertTrue('sourcetype' in job.events.fieldOrder, 'sourcetype field is missing in field order')
+        self.assertTrue('cola' in job.events.fieldOrder, 'cola field is missing in field order')
+        self.assertTrue('lolcat' not in job.events.fieldOrder, 'unexpected lolcat field is present in field order')
+
+        # now check that the restriction applies
+        job.setFetchOption(show_empty_fields=False)
+        self.assertTrue(not job.getFetchOptions()['show_empty_fields'])
+
+        job.setFetchOption(field_list=['host'])
+        self.assertTrue('host' in job.events.fieldOrder, 'host field is missing in field order')
+        self.assertTrue('source' not in job.events.fieldOrder, 'source field is errantly in field order')
+        self.assertTrue('sourcetype' not in job.events.fieldOrder, 'sourcetype field is errantly in field order')
+        self.assertTrue('cola' not in job.events.fieldOrder, 'cola field is missing in field order')
+
+        # check that non-event feeds always parrot back what was passed in,
+        # regardless of what summary says
+        job.setFetchOption(field_list=['host', 'blue', 'red', 'green'], show_empty_fields=False)
+        self.assertTrue('host' in job.results.fieldOrder, 'host field is missing in field order')
+        self.assertTrue('blue' in job.results.fieldOrder, 'blue field is missing in field order')
+        self.assertTrue('red' in job.results.fieldOrder, 'red field is missing in field order')
+        self.assertTrue('green' in job.results.fieldOrder, 'green field is missing in field order')
+
+
+        job.cancel()
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultTimeEpoch(self):
+        '''
+        Check that the Result() object time property and methods work
+        properly when output_time_format=%s.%Q
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        # first check if empty fields is on (by default)
+        job = dispatch('windbag rowcount=100 interval=2220', sessionKey=sessionKey)
+
+        waitForJob(job)
+
+        job.setFetchOption(output_time_format='%s.%Q')
+
+        for result in job.events:
+
+            self.assertEqual(
+                result.time,
+                result.fields['_time'][0].value,
+                'check that time property is identical to raw time field')
+
+            self.assertEqual(
+                result.time,
+                str(result.toEpochTime()),
+                'check that toEpochTime() is idempotent')
+            self.assertEqual(
+                datetime.datetime.fromtimestamp(float(result.time), util.TZInfo()).strftime("%F %T %z"),
+                result.toDateTime().strftime("%F %T %z"),
+                'check that toDateTime() matches expected datetime object casting (into local TZ)'
             )
 
+        job.cancel()
 
-        def testDispatchArgAsList(self):
-            '''
-            Test the ability for the dispatch method to auto-handle arguments
-            passed in as a list; all lists are normalized by fieldListToString
-            '''
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultTimeDatetime(self):
+        '''
+        Check that the Result() object time property and methods work
+        properly when output_time_format=ISO-8601
+        '''
 
-            sessionKey = auth.getSessionKey('admin', 'changeme')
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
 
-            s = 'search 23faef2f3 dfae9fa'
-            job = dispatch(s, required_field_list=['A', 'B', 'C'], sessionKey=sessionKey)
-            self.assertEquals(job.search, s)
-            job.cancel()
+        # first check if empty fields is on (by default)
+        job = dispatch('windbag rowcount=100 interval=2220', sessionKey=sessionKey)
 
-            job = dispatch(s, required_field_list='X,Y,Z', sessionKey=sessionKey)
-            self.assertEquals(job.search, s)
-            job.cancel()
+        waitForJob(job)
 
+        job.setFetchOption(output_time_format=util.ISO_8601_STRFTIME)
 
-        def testDispatchArgNormalization(self):
-            '''
-            Tests the normalization of property aliases, to prevent overlap
-            '''
+        for result in job.events:
 
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = dispatch('windbag', sessionKey=sessionKey)
-
-            # first try to set every aliased option and check that they are mapped
-            job.setFetchOptions(**DEFAULT_RESULT_ARG_MAP)
-            setOptions = job.getFetchOptions()
-            for k in DEFAULT_RESULT_ARG_MAP:
-                self.assert_(k not in setOptions)
-
-            # now try double assigment
-            job.setFetchOptions(field_list='directWay')
-            job.setFetchOptions(fieldList='aliasWay')
-            setOptions = job.getFetchOptions()
-            self.assert_('fieldList' not in setOptions)
-            self.assertEquals(setOptions['field_list'], 'aliasWay')
-
-            # and the other way
-            job.setFetchOptions(fieldList='aliasWay')
-            job.setFetchOptions(field_list='directWay')
-            setOptions = job.getFetchOptions()
-            self.assert_('fieldList' not in setOptions)
-            self.assertEquals(setOptions['field_list'], 'directWay')
-
-            job.cancel()
-
-        def testToJsonable(self):
-            '''
-            Tests the primitive serializer
-            '''
-
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = dispatch('windbag', sessionKey=sessionKey)
-            waitForJob(job)
-
-            # try with default time handling
-
-            prim = job.toJsonable()
-            self.assertEquals(prim['eventSearch'].strip(), 'windbag')
-            self.assertEquals(prim['isDone'], True)
-            self.assertEquals(prim['reportSearch'], None)
-
-            try:
-                import json
-                json.dumps(prim)
-            except ImportError:
-                pass
-
-            # try with unix time format
-
-            prim = job.toJsonable(timeFormat='unix')
-            self.assertEquals(prim['eventSearch'].strip(), 'windbag')
-            self.assertEquals(prim['isDone'], True)
-            self.assertEquals(prim['reportSearch'], None)
-
-            try:
-                import json
-                json.dumps(prim)
-            except ImportError:
-                pass
-
-
-
-        def testToJsonableLongRunning(self):
-            '''
-            Tests the primitive serializer while the job is still running
-            '''
-
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-            job = dispatch('search *', sessionKey=sessionKey)
-
-            for i in range(5):
-                prim = job.toJsonable()
-                self.assertNotEquals(prim['sid'], None)
-                time.sleep(2)
-
-            job.cancel()
-
-
-    class SearchResultTests(unittest.TestCase):
-        '''Tests covering splunkd responses to dispatch requests'''
-
-
-        def testAWindbag(self):
-            '''
-            Generate known dummy data to check for consistency
-            '''
-
-            rowCount = 18
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey)
-
-            self.assert_(job.isStreaming, 'job is expected to be streaming; marked as non-streaming')
-            self.assert_(not job.isFinalized, 'job is expected to not be finalized')
-
-            for i, event in enumerate(job.events):
-                self.assertEqual(int(str(event['position'])), i)
-                for field in event:
-                    self.assertNotEqual(event[field], None)
-
-            self.assertEqual(job.count, rowCount)
-
-            job.cancel()
-
-
-        def testSearchInitialSetupDelay(self):
-            '''
-            Upon first executing a search, any of the result endpoints must return
-            an HTTP 204 while it is still preparing results;  the SearchJob should
-            block on access while this is still occuring and not blow up.
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('search *', sessionKey=sessionKey)
-
-            self.assert_(job.createTime)
-
-            events = None
-            runaway = 0
-            while not events and runaway < 20:
-                events = job[1:5]
-                if job.isDone: break
-                time.sleep(.5)
-                runaway += 1
-
-            job.cancel()
-
-
-        def testSearchSpanningFiles(self):
-            '''
-            Test the dispatcher's ability to merge results from split data files;
-            see SPL-12146
-            '''
-
-            rowCount = 2000
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('windbag rowcount=%s' % rowCount, sessionKey=sessionKey)
-
-            for i, event in enumerate(job.events):
-                self.assertEqual(int(str(event['position'])), i)
-
-            self.assertEqual(job.count, rowCount)
-
-            job.cancel()
-
-
-        def xxtestNonStreamingBlocking(self):
-            '''
-            DISABLED: need to do convert windbag to streaming
-            Test the iterator on non-streaming results
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('windbag delay=3 | timechart count', sessionKey=sessionKey)
-
-            # check that access to result row is blocked while search is still prepping
-            self.assertRaises(IndexError, job.__getitem__, 1)
-
-            # check that search is not allowing access to result item
-            # before job is done; raw event access should be okay though
-            while job.count < 2:
-                time.sleep(.5)
-            self.assertRaises(splunk.SplunkdException, job.__getitem__, 1)
-            self.assert_(job.events[0])
-
-            # check that convenience accessor on job object points to 'results'
-            waitForJob(job)
-            self.assertEqual(job[0]['count'], job.results[0]['count'], 'SearchJob index getter is pointed to wrong event set')
-
-            job.cancel()
-
-
-
-        def testTimelinePopulation(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            basetime = 1120201200.0
-            interval = 1
-            expectedBucketCount = 100
-            localtz = util.TZInfo(-7*60, '')
-
-
-            job = dispatch('windbag basetime=%s interval=%s' % (basetime, interval), sessionKey=sessionKey, status_buckets=250)
-
-            waitForJob(job)
-
-            self.assertEqual(len(job.timeline), len(job.timeline.buckets))
-            self.assertEqual(len(job.timeline), expectedBucketCount)
-
-            # check that the last bucket time is the same as the interval
-            # specified in the search string
             self.assertEqual(
-                datetime.datetime.fromtimestamp(basetime, localtz),
-                job.timeline[-1].earliestTime)
+                result.time,
+                result.fields['_time'][0].value,
+                'check that time property is identical to raw time field')
+
+            self.assertEqual(
+                util.parseISO(result.time),
+                result.toDateTime(),
+                'check that toDateTime() returns expected datetime object'
+            )
+
+            self.assertEqual(
+                util.dt2epoch(util.parseISO(result.time)),
+                result.toEpochTime(),
+                'check that toEpochTime() returns expected decimal.Decimal object'
+            )
+
+            self.assertEqual(
+                result.time,
+                util.getISOTime(result.toDateTime()),
+                'check that ISO time string survives round trip'
+            )
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultTimeNegative(self):
+        '''
+        Check that the Result() object time property and methods work
+        properly when output_time_format is not recognized as either
+        ISO or epoch
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        # first check if empty fields is on (by default)
+        job = dispatch('windbag rowcount=5 interval=2220', sessionKey=sessionKey)
+        waitForJob(job)
+        job.setFetchOption(output_time_format='%m-%y-%d')
+
+        for result in job.events:
+
+            self.assertEqual(
+                result.time,
+                result.fields['_time'][0].value,
+                'check that time property is identical to raw time field')
+
+            self.assertRaises(ValueError, result.toEpochTime)
+            self.assertRaises(ValueError, result.toDateTime)
+
+        job.cancel()
+
+
+    @pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+    def testResultTimeNull(self):
+        '''
+        Check that the Result() object time property and methods return
+        None if there is no time
+        '''
+
+        # get session key
+        sessionKey = auth.getSessionKey('admin', 'changeme')
+
+        # first check if empty fields is on (by default)
+        job = dispatch('windbag rowcount=5 interval=2220 | fields - _time', sessionKey=sessionKey)
+        waitForJob(job)
+        job.setFetchOption(output_time_format='%m-%y-%d')
+
+        for result in job.events:
+
+            self.assertEqual(result.time, None, 'check that time property is null')
+            self.assertEqual(result.toEpochTime(), None, 'check that toEpochTime returns nothing')
+            self.assertEqual(result.toDateTime(), None, 'check that toDateTime returns nothing')
+
+        job.cancel()
+
+
+# ----------------------------------
+class TagTests(unittest.TestCase):
+
+    def setUp(self):
+
+        self.xmlString = """<results>
+                                <meta><fieldOrder><field>xyz</field></fieldOrder></meta>
+                                <result offset="0">
+                                    <field k="key1">
+                                    <value h="1">
+                                        <text>some test data</text>
+                                    </value>
+                                    </field>
+                                    <field k="key2">
+                                    <value>
+                                        <text>DB2</text>
+                                        <tag>tag1</tag>
+                                        <tag>tag2</tag>
+                                        <tag>tag3</tag>
+                                    </value>
+                                    </field>
+                                    <field k="key3">
+                                    <value h="1">
+                                        <text>test data3</text>
+                                        <tag>tag4</tag>
+                                        <tag>tag5</tag>
+                                    </value>
 
-            # TODO: resolve the timezone info
-            firstBucketTime = datetime.datetime.fromtimestamp(basetime - interval * (expectedBucketCount - 1), localtz)
-            self.assert_(job.timeline.cursorTime < firstBucketTime, 'cursorTime is not earlier than first bucket time')
-
-            for i, x in enumerate(job.timeline):
-                self.assertEqual(
-                    x.earliestTime,
-                    datetime.datetime.fromtimestamp(basetime - interval * (expectedBucketCount - (i + 1)), localtz))
-                self.assertEquals(x.itemCount, 1)
-                self.assertEquals(x.duration, datetime.timedelta(seconds=1))
-                self.assertTrue(x.isComplete, 'bucket is not finalized')
-
-
-            self.assertEqual(job.timeline.isComplete, True)
-
-            job.cancel()
-
-
-        def testSummary(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            basetime = 1205967600
-            job = dispatch('windbag basetime=%s interval=1' % basetime, sessionKey=sessionKey, status_buckets=1)
-
-            waitForJob(job)
-
-            self.assertEqual(job.summary.latestTime, None)
-            self.assertEqual(job.summary.earliestTime, None)
-            self.assertEqual(job.summary.count, 100)
-
-            for fieldName in job.summary.fields:
-                self.assertEqual(job.summary.fields[fieldName]['isExact'], True)
-
-            f = job.summary.fields
-
-            self.assertEquals(f['position']['count'], 100)
-            self.assertEquals(f['position']['distinctCount'], 100)
-            self.assertEquals(f['position']['numericCount'], 100)
-            self.assertEquals(f['position']['min'], 0)
-            self.assertEquals(f['position']['max'], 99)
-
-            self.assertEquals(f['source']['modes'][0]['value'], 'SpaceOdyssey')
-            self.assertEquals(f['source']['modes'][0]['count'], 100)
-            self.assertEquals(f['source']['modes'][0]['isExact'], True)
-
-            job.cancel()
-
-            # summary fetch options
-            job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1)
-            waitForJob(job)
-            job.setFetchOption(summary=dict(search="fancy"))
-            self.assertEquals(len(job.summary.fields), 1)
-            job.cancel()
-
-            job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
-            waitForJob(job)
-            job.setFetchOption(summary=dict(min_freq=".99"))
-            self.assertEquals(len(job.summary.fields), 10)
-            job.cancel()
-
-            job = dispatch('windbag', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
-            waitForJob(job)
-            job.setFetchOption(summary=dict(min_freq=".5", search="source"))
-            self.assertEquals(len(job.summary.fields), 2)
-            job.cancel()
-
-            job = dispatch('windbag', sessionKey=sessionKey, status_buckets=0, required_field_list='*')
-            waitForJob(job)
-            job.setFetchOption(summary=dict(min_freq=".5", search="source"))
-            self.assertEquals(len(job.summary.fields), 0)
-            job.cancel()
-
-
-
-        def XXtestMaxLines(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            job = dispatch('windbag multiline=true fieldcount=100', sessionKey=sessionKey)
-
-            waitForJob(job)
-
-            job.setFetchOption(maxLines=12)
-
-            # the windbag operator has a bunch of default fields that exist; we pad by 4
-            self.assertEquals(job.events[0].raw.strip().count('\n') + 1, 16)
-
-            job.cancel()
-
-
-        def testFeedEvent(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            rowcount = 200
-
-            job = dispatch('| windbag rowcount=%s | fields *' % rowcount, sessionKey=sessionKey, status_buckets=1)
-
-            waitForJob(job)
-
-            # check that XML is valid
-            feed = job.getFeed('events', outputMode='xml')
-            et.fromstring(feed)
-
-            # now get JSON format so we can do quick parse
-            feed = job.getFeed(mode='events', outputMode='json', count=rowcount)
-            feed = json.loads(feed)
-            feedResults = feed['results']
-
-            self.assertEquals(len(feedResults), rowcount)
-
-            for i, x in enumerate(feedResults):
-                self.assertEquals(int(str(x['position'])), i)
-
-            #
-            # check that passed params are recognized
-            #
-            offset = 12
-            count = 5
-            job.setFetchOption(count=count, offset=offset)
-            feed = job.getFeed(mode='events', outputMode='json')
-            feed = json.loads(feed)
-            feedResults = feed['results']
-
-            self.assertEquals(len(feedResults), count)
-
-            for i in range(offset, offset + count - 1):
-                self.assertEquals(int(feedResults[i - offset]['position']), i)
-
-            #
-            # check that event and results feeds are the same
-            #
-            job.setFetchOption(count=5, offset=0, outputMode='xml')
-            self.assertEqual(job.getFeed('events'), job.getFeed('results'))
-
-            job.cancel()
-
-
-        def testFeedCount(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            rowcount = 228
-
-            job = dispatch('windbag rowcount=%s' % rowcount, sessionKey=sessionKey)
-
-            waitForJob(job)
-
-            job.setFetchOption(outputMode='json')
-
-            # check that the default count=100
-            feed = job.getFeed('results')
-            feed = json.loads(feed)
-            feedResults = feed['results']
-            self.assertEquals(len(feedResults), 100)
-
-            # check that count is respected
-            job.setFetchOption(count=124)
-            feed = job.getFeed('results')
-            feed = json.loads(feed)
-            feedResults = feed['results']
-            self.assertEquals(len(feedResults), 124)
-
-            # check that count=0 returns all
-            job.setFetchOption(count=0)
-            feed = job.getFeed('results')
-            feed = json.loads(feed)
-            feedResults = feed['results']
-            self.assertEquals(len(feedResults), rowcount)
-
-            job.cancel()
-
-        def testSearchAll(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            data = searchAll('windbag rowcount=100', status_buckets=1)
-
-            for i, x in enumerate(data):
-                self.assertEquals(int(str(x['position'])), i)
-
-
-        def testSearchOne(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            data = searchOne('windbag rowcount=100', status_buckets=1)
-            self.assert_(isinstance(data, Result))
-
-            #self.assertEqual(str(data), expectedResult)
-
-
-        def testSearchCount(self):
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            rowcount = 321
-            data = searchCount('windbag rowcount=%s' % rowcount)
-
-            self.assertEqual(data, rowcount)
-
-
-        def XXXtestShowEmptyFields(self):
-            '''
-            disabling this test: the empty field request behavior that is
-            expected in this test has not been true for a while, as the backend
-            will only display fields that exist somewhere in the dataset;
-            am unable to find the SPL trail
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            # first check if empty fields is on (by default)
-            job = dispatch('windbag rowcount=10', sessionKey=sessionKey, status_buckets=1, required_field_list='*')
-
-            waitForJob(job)
-
-            # check that non-existent requested fields show up
-            job.setFetchOption(field_list=['host', 'source', 'sourcetype', 'cola'])
-            self.assert_(job.getFetchOptions()['show_empty_fields'])
-            self.assert_('host' in job.events.fieldOrder, 'host field is missing in field order')
-            self.assert_('source' in job.events.fieldOrder, 'source field is missing in field order')
-            self.assert_('sourcetype' in job.events.fieldOrder, 'sourcetype field is missing in field order')
-            self.assert_('cola' in job.events.fieldOrder, 'cola field is missing in field order')
-            self.assert_('lolcat' not in job.events.fieldOrder, 'unexpected lolcat field is present in field order')
-
-            # now check that the restriction applies
-            job.setFetchOption(show_empty_fields=False)
-            self.assert_(not job.getFetchOptions()['show_empty_fields'])
-
-            job.setFetchOption(field_list=['host'])
-            self.assert_('host' in job.events.fieldOrder, 'host field is missing in field order')
-            self.assert_('source' not in job.events.fieldOrder, 'source field is errantly in field order')
-            self.assert_('sourcetype' not in job.events.fieldOrder, 'sourcetype field is errantly in field order')
-            self.assert_('cola' not in job.events.fieldOrder, 'cola field is missing in field order')
-
-            # check that non-event feeds always parrot back what was passed in,
-            # regardless of what summary says
-            job.setFetchOption(field_list=['host', 'blue', 'red', 'green'], show_empty_fields=False)
-            self.assert_('host' in job.results.fieldOrder, 'host field is missing in field order')
-            self.assert_('blue' in job.results.fieldOrder, 'blue field is missing in field order')
-            self.assert_('red' in job.results.fieldOrder, 'red field is missing in field order')
-            self.assert_('green' in job.results.fieldOrder, 'green field is missing in field order')
-
-
-            job.cancel()
-
-
-        def testResultTimeEpoch(self):
-            '''
-            Check that the Result() object time property and methods work
-            properly when output_time_format=%s.%Q
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            # first check if empty fields is on (by default)
-            job = dispatch('windbag rowcount=100 interval=2220', sessionKey=sessionKey)
-
-            waitForJob(job)
-
-            job.setFetchOption(output_time_format='%s.%Q')
-
-            for result in job.events:
-
-                self.assertEquals(
-                    result.time,
-                    result.fields['_time'][0].value,
-                    'check that time property is identical to raw time field')
-
-                self.assertEquals(
-                    result.time,
-                    str(result.toEpochTime()),
-                    'check that toEpochTime() is idempotent')
-
-                self.assertEquals(
-                    datetime.datetime.fromtimestamp(float(result.time), util.TZInfo()),
-                    result.toDateTime(),
-                    'check that toDateTime() matches expected datetime object casting (into local TZ)'
-                )
-
-            job.cancel()
-
-
-        def testResultTimeDatetime(self):
-            '''
-            Check that the Result() object time property and methods work
-            properly when output_time_format=ISO-8601
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            # first check if empty fields is on (by default)
-            job = dispatch('windbag rowcount=100 interval=2220', sessionKey=sessionKey)
-
-            waitForJob(job)
-
-            job.setFetchOption(output_time_format=util.ISO_8601_STRFTIME)
-
-            for result in job.events:
-
-                self.assertEquals(
-                    result.time,
-                    result.fields['_time'][0].value,
-                    'check that time property is identical to raw time field')
-
-                self.assertEquals(
-                    util.parseISO(result.time),
-                    result.toDateTime(),
-                    'check that toDateTime() returns expected datetime object'
-                )
-
-                self.assertEquals(
-                    util.dt2epoch(util.parseISO(result.time)),
-                    result.toEpochTime(),
-                    'check that toEpochTime() returns expected decimal.Decimal object'
-                )
-
-                self.assertEquals(
-                    result.time,
-                    util.getISOTime(result.toDateTime()),
-                    'check that ISO time string survives round trip'
-                )
-
-            job.cancel()
-
-
-        def testResultTimeNegative(self):
-            '''
-            Check that the Result() object time property and methods work
-            properly when output_time_format is not recognized as either
-            ISO or epoch
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            # first check if empty fields is on (by default)
-            job = dispatch('windbag rowcount=5 interval=2220', sessionKey=sessionKey)
-            waitForJob(job)
-            job.setFetchOption(output_time_format='%m-%y-%d')
-
-            for result in job.events:
-
-                self.assertEquals(
-                    result.time,
-                    result.fields['_time'][0].value,
-                    'check that time property is identical to raw time field')
-
-                self.assertRaises(ValueError, result.toEpochTime)
-                self.assertRaises(ValueError, result.toDateTime)
-
-            job.cancel()
-
-
-        def testResultTimeNull(self):
-            '''
-            Check that the Result() object time property and methods return
-            None if there is no time
-            '''
-
-            # get session key
-            sessionKey = auth.getSessionKey('admin', 'changeme')
-
-            # first check if empty fields is on (by default)
-            job = dispatch('windbag rowcount=5 interval=2220 | fields - _time', sessionKey=sessionKey)
-            waitForJob(job)
-            job.setFetchOption(output_time_format='%m-%y-%d')
-
-            for result in job.events:
-
-                self.assertEquals(result.time, None, 'check that time property is null')
-                self.assertEquals(result.toEpochTime(), None, 'check that toEpochTime returns nothing')
-                self.assertEquals(result.toDateTime(), None, 'check that toDateTime returns nothing')
-
-            job.cancel()
-
-
-    # ----------------------------------
-    class TagTests(unittest.TestCase):
-
-        def setUp(self):
-
-           self.xmlString = """<results>
-                                  <meta><fieldOrder><field>xyz</field></fieldOrder></meta>
-                                  <result offset="0">
-                                     <field k="key1">
-                                        <value h="1">
-                                           <text>some test data</text>
-                                        </value>
-                                     </field>
-                                     <field k="key2">
                                         <value>
-                                           <text>DB2</text>
-                                           <tag>tag1</tag>
-                                           <tag>tag2</tag>
-                                           <tag>tag3</tag>
+                                        <text>test data4</text>
+                                        <tag>tag6</tag>
+                                        <tag>tag7</tag>
                                         </value>
-                                     </field>
-                                     <field k="key3">
-                                        <value h="1">
-                                           <text>test data3</text>
-                                           <tag>tag4</tag>
-                                           <tag>tag5</tag>
-                                        </value>
+                                    </field>
+                                    <field k="_raw">
+                                    <v xml:space="preserve" trunc="0">
+                                        2008-12-22-14.08.15.320000-420 I27561H327         LEVEL: Event
+                                        PID     : 2120                 TID  : 4760        PROC : db2fmp.exe
+                                        INSTANCE: DB2                  NODE : 000
+                                        FUNCTION: DB2 UDB, Automatic Table Maintenance, db2HmonEvalStats, probe:100
+                                        START   : Automatic Runstats: evaluation has started on database TRADEDB
+                                    </v>
+                                    </field>
+                                    <field k="_time">
+                                    <value>
+                                        <text>2008-12-22T14:08:15.320-08:00</text>
+                                    </value>
+                                    </field>
+                                </result>
+                            </results>"""
 
-                                         <value>
-                                            <text>test data4</text>
-                                            <tag>tag6</tag>
-                                            <tag>tag7</tag>
-                                         </value>
-                                      </field>
-                                     <field k="_raw">
-                                        <v xml:space="preserve" trunc="0">
-                                            2008-12-22-14.08.15.320000-420 I27561H327         LEVEL: Event
-                                            PID     : 2120                 TID  : 4760        PROC : db2fmp.exe
-                                            INSTANCE: DB2                  NODE : 000
-                                            FUNCTION: DB2 UDB, Automatic Table Maintenance, db2HmonEvalStats, probe:100
-                                            START   : Automatic Runstats: evaluation has started on database TRADEDB
-                                        </v>
-                                     </field>
-                                     <field k="_time">
-                                        <value>
-                                           <text>2008-12-22T14:08:15.320-08:00</text>
-                                        </value>
-                                     </field>
-                                   </result>
-                                </results>"""
+        #No need of making rest calls etc here. Create a dummy ResultSet obj in order to get the parsed result
+        #These tests are only related to tags etc so we want to test if our population of the data structures happened correctly
+        self._dummyResultSetObj = ResultSet('', '')._parseResultSet(self.xmlString)[0]
 
-           #No need of making rest calls etc here. Create a dummy ResultSet obj in order to get the parsed result
-           #These tests are only related to tags etc so we want to test if our population of the data structures happened correctly
-           self._dummyResultSetObj = ResultSet('', '')._parseResultSet(self.xmlString)[0]
+# ------------------------------------
+class Tags_SingleValNoTag(TagTests):
 
-    # ------------------------------------
-    class Tags_SingleValNoTag(TagTests):
+    def setUp(self):
+        super(Tags_SingleValNoTag, self).setUp()
+        self.result_field_key1 = self._dummyResultSetObj['key1']
 
-        def setUp(self):
-           super(Tags_SingleValNoTag, self).setUp()
-           self.result_field_key1 = self._dummyResultSetObj['key1']
+    #######################################
+    # tests related to ResultField object #
+    #######################################
 
-        #######################################
-        # tests related to ResultField object #
-        #######################################
+    def testResultField_key1(self):
+        self.assertTrue(isinstance(self.result_field_key1, ResultField), 'ResultField object did not evaluate correctly (key1)')
 
-        def testResultField_key1(self):
-           self.assertTrue(isinstance(self.result_field_key1, ResultField), 'ResultField object did not evaluate correctly (key1)')
+    def testResultFieldAsString_key1(self):
+        self.assertEqual(str(self.result_field_key1), 'some test data', 'string evaluation of ResultField object failed (key1)')
 
-        def testResultFieldAsString_key1(self):
-           self.assertEqual(str(self.result_field_key1), 'some test data', 'string evaluation of ResultField object failed (key1)')
+    def testResultFieldLength_key1(self):
+        self.assertEqual(len(self.result_field_key1), 1, 'len of ResultField object did not evaluate correctly (key1)')
 
-        def testResultFieldLength_key1(self):
-           self.assertEqual(len(self.result_field_key1), 1, 'len of ResultField object did not evaluate correctly (key1)')
+    ############################################
+    # tests related to ResultFieldValue object #
+    ############################################
 
-        ############################################
-        # tests related to ResultFieldValue object #
-        ############################################
+    def testResultFieldValue_key1(self):
+        self.assertTrue(isinstance(self.result_field_key1[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key1)')
+        self.assertTrue(self.result_field_key1[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
 
-        def testResultFieldValue_key1(self):
-           self.assertTrue(isinstance(self.result_field_key1[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key1)')
-           self.assertTrue(self.result_field_key1[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
+    def testResultFieldValueText_key1(self):
+        self.assertEqual(self.result_field_key1[0].value, 'some test data', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key1)')
 
-        def testResultFieldValueText_key1(self):
-           self.assertEqual(self.result_field_key1[0].value, 'some test data', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key1)')
+    def testResultFieldValueAsString_key1(self):
+        self.assertEqual(str(self.result_field_key1[0]), 'some test data', 'string evaluation of ResultFieldValue object failed (key1)')
 
-        def testResultFieldValueAsString_key1(self):
-           self.assertEqual(str(self.result_field_key1[0]), 'some test data', 'string evaluation of ResultFieldValue object failed (key1)')
+    def testResultFieldValueTags_key1(self):
+        self.assertEqual(self.result_field_key1[0].tags, [], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key1)')
 
-        def testResultFieldValueTags_key1(self):
-           self.assertEqual(self.result_field_key1[0].tags, [], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key1)')
+    def testResultFieldValueTagsLength_key1(self):
+        self.assertEqual(len(self.result_field_key1[0].tags), 0, 'len of ResultField object tags did not evaluate correctly (key1)')
 
-        def testResultFieldValueTagsLength_key1(self):
-           self.assertEqual(len(self.result_field_key1[0].tags), 0, 'len of ResultField object tags did not evaluate correctly (key1)')
-
-        def testResultFieldValueLength_key1(self):
-           self.assertRaises(Exception, len, self.result_field_key1[0])
+    def testResultFieldValueLength_key1(self):
+        self.assertRaises(Exception, len, self.result_field_key1[0])
 
 
-    # -------------------------------------
-    class Tags_SingleValWithTag(TagTests):
+# -------------------------------------
+class Tags_SingleValWithTag(TagTests):
 
-        def setUp(self):
-           super(Tags_SingleValWithTag, self).setUp()
-           self.result_field_key2 = self._dummyResultSetObj['key2']
+    def setUp(self):
+        super(Tags_SingleValWithTag, self).setUp()
+        self.result_field_key2 = self._dummyResultSetObj['key2']
 
-        #######################################
-        # tests related to ResultField object #
-        #######################################
+    #######################################
+    # tests related to ResultField object #
+    #######################################
 
-        def testResultField_key2(self):
-           self.assertTrue(isinstance(self.result_field_key2, ResultField), 'ResultField object did not evaluate correctly (key2)')
+    def testResultField_key2(self):
+        self.assertTrue(isinstance(self.result_field_key2, ResultField), 'ResultField object did not evaluate correctly (key2)')
 
-        def testResultFieldAsString_key2(self):
-           self.assertEqual(str(self.result_field_key2), 'DB2', 'string evaluation of ResultField object failed (key2)')
+    def testResultFieldAsString_key2(self):
+        self.assertEqual(str(self.result_field_key2), 'DB2', 'string evaluation of ResultField object failed (key2)')
 
-        def testResultFieldLength_key2(self):
-           self.assertEqual(len(self.result_field_key2), 1, 'len of ResultField object did not evaluate correctly (key2)')
+    def testResultFieldLength_key2(self):
+        self.assertEqual(len(self.result_field_key2), 1, 'len of ResultField object did not evaluate correctly (key2)')
 
-        ############################################
-        # tests related to ResultFieldValue object #
-        ############################################
+    ############################################
+    # tests related to ResultFieldValue object #
+    ############################################
 
-        def testResultFieldValue_key2(self):
-           self.assertTrue(isinstance(self.result_field_key2[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key2)')
-           self.assertFalse(self.result_field_key2[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
+    def testResultFieldValue_key2(self):
+        self.assertTrue(isinstance(self.result_field_key2[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key2)')
+        self.assertFalse(self.result_field_key2[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
 
-        def testResultFieldValueText_key2(self):
-           self.assertEqual(self.result_field_key2[0].value, 'DB2', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key2)')
+    def testResultFieldValueText_key2(self):
+        self.assertEqual(self.result_field_key2[0].value, 'DB2', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key2)')
 
-        def testResultFieldValueAsString_key2(self):
-           self.assertEqual(str(self.result_field_key2[0]), 'DB2', 'string evaluation of ResultFieldValue object failed (key2)')
+    def testResultFieldValueAsString_key2(self):
+        self.assertEqual(str(self.result_field_key2[0]), 'DB2', 'string evaluation of ResultFieldValue object failed (key2)')
 
-        def testResultFieldValueTags_key2(self):
-           self.assertEqual(self.result_field_key2[0].tags, ['tag1', 'tag2', 'tag3'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key2)')
+    def testResultFieldValueTags_key2(self):
+        self.assertEqual(self.result_field_key2[0].tags, ['tag1', 'tag2', 'tag3'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key2)')
 
-        def testResultFieldValueTagsLength_key2(self):
-           self.assertEqual(len(self.result_field_key2[0].tags), 3, 'len of ResultField object tags did not evaluate correctly (key2)')
+    def testResultFieldValueTagsLength_key2(self):
+        self.assertEqual(len(self.result_field_key2[0].tags), 3, 'len of ResultField object tags did not evaluate correctly (key2)')
 
-        def testResultFieldValueLength_key2(self):
-           self.assertRaises(Exception, len, self.result_field_key2[0])
+    def testResultFieldValueLength_key2(self):
+        self.assertRaises(Exception, len, self.result_field_key2[0])
 
-    # ------------------------------------
-    class Tags_MultiValWithTag(TagTests):
+# ------------------------------------
+class Tags_MultiValWithTag(TagTests):
 
-        def setUp(self):
-           super(Tags_MultiValWithTag, self).setUp()
-           self.result_field_key3 = self._dummyResultSetObj['key3']
+    def setUp(self):
+        super(Tags_MultiValWithTag, self).setUp()
+        self.result_field_key3 = self._dummyResultSetObj['key3']
 
-        #######################################
-        # tests related to ResultField object #
-        #######################################
+    #######################################
+    # tests related to ResultField object #
+    #######################################
 
-        def testResultField_key3(self):
-           self.assertTrue(isinstance(self.result_field_key3, ResultField), 'ResultField object did not evaluate correctly (key3)')
+    def testResultField_key3(self):
+        self.assertTrue(isinstance(self.result_field_key3, ResultField), 'ResultField object did not evaluate correctly (key3)')
 
-        def testResultFieldAsString_key3(self):
-           self.assertEqual(str(self.result_field_key3), 'test data3,test data4', 'string evaluation of ResultField object failed (key3)')
+    def testResultFieldAsString_key3(self):
+        self.assertEqual(str(self.result_field_key3), 'test data3,test data4', 'string evaluation of ResultField object failed (key3)')
 
-        def testResultFieldLength_key3(self):
-           self.assertEqual(len(self.result_field_key3), 2, 'len of ResultField object did not evaluate correctly (key3)')
+    def testResultFieldLength_key3(self):
+        self.assertEqual(len(self.result_field_key3), 2, 'len of ResultField object did not evaluate correctly (key3)')
 
-        ############################################
-        # tests related to ResultFieldValue object #
-        ############################################
+    ############################################
+    # tests related to ResultFieldValue object #
+    ############################################
 
-        def testResultFieldValue_key3(self):
-           self.assertTrue(isinstance(self.result_field_key3[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key3)')
-           self.assertTrue(self.result_field_key3[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
+    def testResultFieldValue_key3(self):
+        self.assertTrue(isinstance(self.result_field_key3[0], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key3)')
+        self.assertTrue(self.result_field_key3[0].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
 
-        def testResultFieldValueText_key3(self):
-           self.assertEqual(self.result_field_key3[0].value, 'test data3', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key3)')
+    def testResultFieldValueText_key3(self):
+        self.assertEqual(self.result_field_key3[0].value, 'test data3', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key3)')
 
-        def testResultFieldValueAsString_key3(self):
-           self.assertEqual(str(self.result_field_key3[0]), 'test data3', 'string evaluation of ResultFieldValue object failed (key3)')
+    def testResultFieldValueAsString_key3(self):
+        self.assertEqual(str(self.result_field_key3[0]), 'test data3', 'string evaluation of ResultFieldValue object failed (key3)')
 
-        def testResultFieldValueTags_key3(self):
-           self.assertEqual(self.result_field_key3[0].tags, ['tag4', 'tag5'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key3)')
+    def testResultFieldValueTags_key3(self):
+        self.assertEqual(self.result_field_key3[0].tags, ['tag4', 'tag5'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key3)')
 
-        def testResultFieldValueTagsLength_key3(self):
-           self.assertEqual(len(self.result_field_key3[0].tags), 2, 'len of ResultField object tags did not evaluate correctly (key3)')
+    def testResultFieldValueTagsLength_key3(self):
+        self.assertEqual(len(self.result_field_key3[0].tags), 2, 'len of ResultField object tags did not evaluate correctly (key3)')
 
-        def testResultFieldValueLength_key3(self):
-           self.assertRaises(Exception, len, self.result_field_key3[0])
+    def testResultFieldValueLength_key3(self):
+        self.assertRaises(Exception, len, self.result_field_key3[0])
 
-        def testResultFieldValueItem2_key3(self):
-           self.assertTrue(isinstance(self.result_field_key3[1], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key3 item2)')
-           self.assertFalse(self.result_field_key3[1].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
+    def testResultFieldValueItem2_key3(self):
+        self.assertTrue(isinstance(self.result_field_key3[1], ResultFieldValue), 'ResultFieldValue object did not evaluate correctly (key3 item2)')
+        self.assertFalse(self.result_field_key3[1].isHighlighted, 'ResultFieldValue isHighlighted attribute did not evaluate correctly')
 
-        def testResultFieldValueTextItem2_key3(self):
-           self.assertEqual(self.result_field_key3[1].value, 'test data4', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key3 item2)')
+    def testResultFieldValueTextItem2_key3(self):
+        self.assertEqual(self.result_field_key3[1].value, 'test data4', 'attribute "value" of ResultFieldValue object did not evaluate correctly (key3 item2)')
 
-        def testResultFieldValueAsStringItem2_key3(self):
-           self.assertEqual(str(self.result_field_key3[1]), 'test data4', 'string evaluation of ResultFieldValue object failed (key3 item2)')
+    def testResultFieldValueAsStringItem2_key3(self):
+        self.assertEqual(str(self.result_field_key3[1]), 'test data4', 'string evaluation of ResultFieldValue object failed (key3 item2)')
 
-        def testResultFieldValueTagsItem2_key3(self):
-           self.assertEqual(self.result_field_key3[1].tags, ['tag6', 'tag7'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key3 item2)')
+    def testResultFieldValueTagsItem2_key3(self):
+        self.assertEqual(self.result_field_key3[1].tags, ['tag6', 'tag7'], 'attribute "tags" of ResultFieldValue object did not evaluate correctly (key3 item2)')
 
-        def testResultFieldValueTagsLengthItem2_key3(self):
-           self.assertEqual(len(self.result_field_key3[1].tags), 2, 'len of ResultField object tags did not evaluate correctly (key3 item2)')
+    def testResultFieldValueTagsLengthItem2_key3(self):
+        self.assertEqual(len(self.result_field_key3[1].tags), 2, 'len of ResultField object tags did not evaluate correctly (key3 item2)')
 
 
 
 
-    class SearchMessaging(unittest.TestCase):
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class SearchMessaging(unittest.TestCase):
+    '''
+    Tests the job messaging services
+    '''
+
+    def setUp(self):
+        self.sessionKey = auth.getSessionKey('admin', 'changeme')
+
+
+    def testInvalidArgument(self):
         '''
-        Tests the job messaging services
+        Execs a search that has events, but followed by a command that has invalid args
         '''
 
-        def setUp(self):
-            self.sessionKey = auth.getSessionKey('admin', 'changeme')
+        j = dispatch('windbag | timechart bad_arg', sessionKey=self.sessionKey)
+        waitForJob(j)
+        self.assertEqual(j.isFailed, True)
+
+        # job object should raise immediately if data iterator is requested
+        try:
+            for event in j:
+                self.fail('SearchJob.__iter__ did not raise exception')
+                break
+        except:
+            self.assertTrue(True, 'SearchJob.__iter__ this assert should never fail')
+
+        # also check slice accesses
+        try:
+            j[0]
+            self.fail('SearchJob.__getitem__ did not raise exception')
+        except:
+            self.assertTrue(True, 'SearchJob.__getitem__ this assert should never fail')
+
+        # also check slice accesses
+        try:
+            j.results[0]
+            self.fail('SearchJob.__getitem__ did not raise exception')
+        except:
+            self.assertTrue(True, 'SearchJob.__getitem__ this assert should never fail')
 
 
-        def testInvalidArgument(self):
-            '''
-            Execs a search that has events, but followed by a command that has invalid args
-            '''
-
-            j = dispatch('windbag | timechart bad_arg', sessionKey=self.sessionKey)
-            waitForJob(j)
-            self.assertEquals(j.isFailed, True)
-
-            # job object should raise immediately if data iterator is requested
-            try:
-                for event in j:
-                    self.fail('SearchJob.__iter__ did not raise exception')
-                    break
-            except:
-                self.assert_(True, 'SearchJob.__iter__ this assert should never fail')
-
-            # also check slice accesses
-            try:
-                j[0]
-                self.fail('SearchJob.__getitem__ did not raise exception')
-            except:
-                self.assert_(True, 'SearchJob.__getitem__ this assert should never fail')
-
-            # also check slice accesses
-            try:
-                j.results[0]
-                self.fail('SearchJob.__getitem__ did not raise exception')
-            except:
-                self.assert_(True, 'SearchJob.__getitem__ this assert should never fail')
-
-
-        def testInvalidArgumentWithSummaryTimeline(self):
-            '''
-            Execs a search that has events, but followed by a command that has invalid args;
-            tests the timeline and summary objects
-            '''
-
-            j = dispatch('windbag | timechart bad_arg', sessionKey=self.sessionKey)
-            waitForJob(j)
-            self.assertEquals(j.isFailed, True)
-
-            try:
-                j.timeline
-                self.fail('SearchJob.timeline did not raise exception')
-            except:
-                self.assert_(True, 'SearchJob.timeline this assert should never fail')
-
-            try:
-                j.summary
-                self.fail('SearchJob.summary did not raise exception')
-            except:
-                self.assert_(True, 'SearchJob.summary this assert should never fail')
-
-
-
-    class SearchJobIterator(unittest.TestCase):
+    def testInvalidArgumentWithSummaryTimeline(self):
         '''
-        Tests the automatic and explicit iterator behavior around:
-        -- historical events
-        -- historical transforming
-        -- realtime events
-        -- realtime transforming
+        Execs a search that has events, but followed by a command that has invalid args;
+        tests the timeline and summary objects
         '''
 
-        def setUp(self):
-            self.sessionKey = auth.getSessionKey('admin', 'changeme')
-            self.j = None
+        j = dispatch('windbag | timechart bad_arg', sessionKey=self.sessionKey)
+        waitForJob(j)
+        self.assertEqual(j.isFailed, True)
 
-        def tearDown(self):
-            try:
-                self.j.cancel()
-            except:
-                pass
+        try:
+            j.timeline
+            self.fail('SearchJob.timeline did not raise exception')
+        except:
+            self.assertTrue(True, 'SearchJob.timeline this assert should never fail')
 
-        def xxAutoEventSelectionRunning(self):
-            '''
-            disable this test -- succeeds or fails based on speed of job execution
-            getAutoAssetType() will return 'events' or 'results' for this search depending on whether or not the
-            job is done when the assert is executed
-            '''
-            self.j = dispatch('search index=_internal', status_buckets=500, rf='*')
+        try:
+            j.summary
+            self.fail('SearchJob.summary did not raise exception')
+        except:
+            self.assertTrue(True, 'SearchJob.summary this assert should never fail')
 
-            # wait for up to 30 seconds for data to start flowing
-            for i in range(30):
-                if self.j.eventCount > 0:
-                    self.assertEquals(self.j.getAutoAssetType(), 'events')
-                    break
-                time.sleep(.2)
 
-        def testAutoResultSelectionDone(self):
-            self.j = dispatch('search index=_internal | head 10', status_buckets=1)
-            waitForJob(self.j)
-            self.assertEquals(self.j.getAutoAssetType(), 'results')
 
-        def testAutoResultSelectionRunning(self):
-            self.j = dispatch('search index=_internal | timechart count', status_buckets=1)
-            time.sleep(2)
-            self.assertEquals(self.j.getAutoAssetType(), 'results')
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class SearchJobIterator(unittest.TestCase):
+    '''
+    Tests the automatic and explicit iterator behavior around:
+    -- historical events
+    -- historical transforming
+    -- realtime events
+    -- realtime transforming
+    '''
 
-        def testAutoTransformingResultSelectionDone(self):
-            self.j = dispatch('search index=_internal | head 100 | timechart count', status_buckets=1)
-            waitForJob(self.j)
-            self.assertEquals(self.j.getAutoAssetType(), 'results')
+    def setUp(self):
+        self.sessionKey = auth.getSessionKey('admin', 'changeme')
+        self.j = None
 
-        def testAutoResultSelectionRealtimeEvents(self):
-            self.j = dispatch('search index=_internal', status_buckets=1, earliest_time='rt-1m', latest_time='rt')
-            time.sleep(2)
-            self.assertEquals(self.j.getAutoAssetType(), 'results_preview')
+    def tearDown(self):
+        try:
+            self.j.cancel()
+        except:
+            pass
 
-        def testAutoResultSelectionRealtimeReport(self):
-            self.j = dispatch('search index=_internal | timechart count', status_buckets=1, earliest_time='rt-1m', latest_time='rt')
-            time.sleep(2)
-            self.assertEquals(self.j.getAutoAssetType(), 'results_preview')
+    def xxAutoEventSelectionRunning(self):
+        '''
+        disable this test -- succeeds or fails based on speed of job execution
+        getAutoAssetType() will return 'events' or 'results' for this search depending on whether or not the
+        job is done when the assert is executed
+        '''
+        self.j = dispatch('search index=_internal', status_buckets=500, rf='*')
 
-        def XXtestIteratorStreaming(self):
-            '''
-            TODO:
-
-            This test is current disabled because it fails constantly in the
-            test automation framework.  Proper fix is to introduce a search
-            command that props open a search job for a predetermined time
-            interval.
-            '''
-            self.j = dispatch('search index=_*', status_buckets=300)
-
+        # wait for up to 30 seconds for data to start flowing
+        for i in range(30):
+            if self.j.eventCount > 0:
+                self.assertEqual(self.j.getAutoAssetType(), 'events')
+                break
             time.sleep(.2)
-            self.assertEquals(self.j.eventIsStreaming, True)
 
-            # check that the iterator returns while job is still running
-            for i, row in enumerate(self.j.events):
-                if self.j.isDone:
-                    self.fail('job completed before we could even get one event; search is running too fast')
-                else:
-                    break
+    def testAutoResultSelectionDone(self):
+        self.j = dispatch('search index=_internal | head 10', status_buckets=1)
+        waitForJob(self.j)
+        self.assertEqual(self.j.getAutoAssetType(), 'results')
+
+    def testAutoResultSelectionRunning(self):
+        self.j = dispatch('search index=_internal | timechart count', status_buckets=1)
+        time.sleep(2)
+        self.assertEqual(self.j.getAutoAssetType(), 'results')
+
+    def testAutoTransformingResultSelectionDone(self):
+        self.j = dispatch('search index=_internal | head 100 | timechart count', status_buckets=1)
+        waitForJob(self.j)
+        self.assertEqual(self.j.getAutoAssetType(), 'results')
+
+    def testAutoResultSelectionRealtimeEvents(self):
+        self.j = dispatch('search index=_internal', status_buckets=1, earliest_time='rt-1m', latest_time='rt')
+        time.sleep(2)
+        self.assertEqual(self.j.getAutoAssetType(), 'results_preview')
+
+    def testAutoResultSelectionRealtimeReport(self):
+        self.j = dispatch('search index=_internal | timechart count', status_buckets=1, earliest_time='rt-1m', latest_time='rt')
+        time.sleep(2)
+        self.assertEqual(self.j.getAutoAssetType(), 'results_preview')
+
+    def XXtestIteratorStreaming(self):
+        '''
+        TODO:
+
+        This test is current disabled because it fails constantly in the
+        test automation framework.  Proper fix is to introduce a search
+        command that props open a search job for a predetermined time
+        interval.
+        '''
+        self.j = dispatch('search index=_*', status_buckets=300)
+
+        time.sleep(.2)
+        self.assertEqual(self.j.eventIsStreaming, True)
+
+        # check that the iterator returns while job is still running
+        for i, row in enumerate(self.j.events):
+            if self.j.isDone:
+                self.fail('job completed before we could even get one event; search is running too fast')
             else:
-                self.fail('SearchJob iterator failed to return streaming results; got=%s' % i)
+                break
+        else:
+            self.fail('SearchJob iterator failed to return streaming results; got=%s' % i)
 
-        def testIteratorNonStreaming(self):
-            self.j = dispatch('search index=_internal | sort + _time', status_buckets=1)
+    def testIteratorNonStreaming(self):
+        self.j = dispatch('search index=_internal | sort + _time', status_buckets=1)
 
-            time.sleep(1)
-            self.j.refresh()
-            self.assertEquals(self.j.eventIsStreaming, False)
+        time.sleep(1)
+        self.j.refresh()
+        self.assertEqual(self.j.eventIsStreaming, False)
 
-            # TODO: check that the iterator is blocked until job is done
+        # TODO: check that the iterator is blocked until job is done
 
 
-
+if __name__ == '__main__':
     # exec all tests
     loader = unittest.TestLoader()
     suites = []

@@ -58,6 +58,7 @@ def _get_active_config():
         'PIVOT_ADHOC_ACCELERATION_MODE': cherrypy.config.get('pivot_adhoc_acceleration_mode', 'Elastic'),
         'JSCHART_TEST_MODE': cherrypy.config.get('jschart_test_mode', False),
         'PDFGEN_IS_AVAILABLE': cherrypy.config.get('pdfgen_is_available', 0),
+        'JOB_DEFAULT_AUTO_CANCEL': int(float(cherrypy.config.get('job_default_auto_cancel', 30))),
         'JOB_MIN_POLLING_INTERVAL': int(float(cherrypy.config.get('job_min_polling_interval', 100))),
         'JOB_MAX_POLLING_INTERVAL': int(float(cherrypy.config.get('job_max_polling_interval', 1000))),
         'SPLUNKD_PATH': util.make_url('/splunkd/__raw'),
@@ -76,6 +77,7 @@ def _get_active_config():
         'DASHBOARD_HTML_ALLOW_INLINE_STYLES': cherrypy.config.get('dashboard_html_allow_inline_styles', True),
         'DASHBOARD_HTML_ALLOW_IFRAMES': cherrypy.config.get('dashboard_html_allow_iframes', True),
         'DASHBOARD_HTML_WRAP_EMBED': cherrypy.config.get('dashboard_html_wrap_embed', True),
+        'DASHBOARD_HTML_ALLOWED_DOMAINS': cherrypy.config.get('dashboard_html_allowed_domains', ''),
         'DASHBOARD_HTML_ALLOW_EMBEDDABLE_CONTENT': cherrypy.config.get('dashboard_html_allow_embeddable_content', False),
         'EMBED_URI': cherrypy.config.get('embed_uri', ''),
         'EMBED_FOOTER': cherrypy.config.get('embed_footer', ''),
@@ -88,7 +90,6 @@ def _get_active_unauthorized_config():
     return {
         'MRSPARKLE_ROOT_PATH': _get_root_path(),
         'MRSPARKLE_PORT_NUMBER': cherrypy.config.get('tools.csrfcookie.port'),
-        'UI_INACTIVITY_TIMEOUT': getCherrypyConfigIntSafe('ui_inactivity_timeout', 60),
         'FORM_KEY': util.getFormKey(),
         'SERVER_ZONEINFO': '',
         'SPLUNKD_PATH': util.make_url('/splunkd/__raw'),

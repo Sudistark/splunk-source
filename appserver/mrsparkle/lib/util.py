@@ -52,17 +52,17 @@ def isCloud():
     instance_type = cherrypy.config.get('instance_type')
     return instance_type == 'cloud'
 
-def isSingleCloud():
-    if not isCloud():
-        return False
-    try: 
-        cloud_indexes = en.getEntity('cluster_blaster_indexes', 'sh_indexes_manager')
-        if cloud_indexes:
-            return False
-        else:
-            return True
-    except Exception as e:
-        return True
+def isFullUiSettingsMode():
+    server_config = splunk.clilib.cli_common.getConfStanza('server', 'shclustering')
+    return server_config.get('ui_settings_mode') == 'full'
+
+def allowInstallFromFile():
+    server_config = splunk.clilib.cli_common.getConfStanza('server', 'applicationsManagement')
+    return splunk.util.normalizeBoolean(server_config.get('allowInstallFromFile', True))
+
+def requireAppInspect():
+    server_config = splunk.clilib.cli_common.getConfStanza('server', 'applicationsManagement')
+    return splunk.util.normalizeBoolean(server_config.get('requireAppInspect', False))
 
 def getProductName():
     if isLite():
@@ -108,6 +108,11 @@ def getFaviconFileName():
 def getDashboardV1TemplateUri():
     return '/pages/dashboard.html'
 
+# Dashboard version 1.1 utilizes web_v2's dashboard.js instead of web.
+# The primary purpose of this version is upgrading dashboards from jQuery 2 to 3.
+def getDashboardV1p1TemplateUri():
+    return '/pages/dashboard_1.1.html'
+
 def getDashboardV2TemplateUri():
     '''
     Version 2 dashboards can only be rendered by a separate app as of Pinkie Pie release
@@ -130,6 +135,30 @@ def getDashboardV2TemplateUri():
 
     return '/view/{}:/templates/dashboard.html'.format(name)
 
+def getDashboardV2Name():
+    '''
+    Returns splunk_dashboard_app_name in web.conf
+    '''
+    conf_settings = en.getEntity('/configs/conf-web', 'settings')
+    dashboardV2Name = conf_settings.get('splunk_dashboard_app_name')
+    return dashboardV2Name
+
+def v1p0_dashboard_template_exists():
+    return splunk_home_file_exists('share/splunk/search_mrsparkle/templates/pages/dashboard.html')
+
+def v1p0_dashboard_exists():
+    return cherrypy.config.get('enable_jQuery2', True) and v1p0_dashboard_template_exists()
+
+def splunk_home_file_exists(rel_splunk_home_path):
+    '''
+    Determine if a file exists in $SPLUNK_HOME
+    '''
+    splunk_home = os.environ.get('SPLUNK_HOME')
+    if not splunk_home:
+        raise Exception('$SPLUNK_HOME environment variable is not set!')
+    target_path = os.path.join(splunk_home, rel_splunk_home_path)
+    return os.path.exists(target_path)
+
 def getServerInfoPayload():
     server_info = splunk.rest.payload.scaffold()
     server_info['entry'][0]['content']['isFree'] = cherrypy.config['is_free_license']
@@ -145,6 +174,17 @@ def getServerInfoPayload():
     server_info['entry'][0]['content']['addOns'] = cherrypy.config['addOns']
     server_info['entry'][0]['content']['activeLicenseSubgroup'] = cherrypy.config['activeLicenseSubgroup']
     return server_info
+
+def dict_to_loggable_string(dictionary):
+    is_dict = type(dictionary) == dict
+    if not is_dict:
+        return ''
+    keys = dictionary.keys()
+    def dict_to_list(key):
+        return "%s=%s" % (key, dictionary[key])
+    mapped_list = map(dict_to_list, keys)
+    loggable_string = ', '.join(mapped_list)
+    return loggable_string
 
 def decomposeIntentions(q, hostPath, namespace, owner) :
     '''
@@ -1097,7 +1137,7 @@ def replace_vars(template, replacement_map, decorators=None, open_delimiter="$",
             varbuffer.append(c)
             if o_delim_len > 1:
                 for j in range(i+1, i+o_delim_len):
-                    varbuffer.append(iterator.next()[1])
+                    varbuffer.append(next(iterator)[1])
             continue
 
         elif template[i:i+c_delim_len] == close_delimiter and inVar:
@@ -1235,9 +1275,9 @@ def convert_to_bytes(relative_value):
     USAGE
 
         >>> convert_to_bytes('10MB')
-        102400000
+        10485760.0
         >>> convert_to_bytes('40 GB')
-        42949672960
+        42949672960.0
         >>> convert_to_bytes('300')
         300
 
@@ -1378,7 +1418,7 @@ def isValidFormKey(key):
         pass
 
     if not match:
-        logger.warn('CSRF form_key mismatch received=%s expected=%s' % (key, getFormKey()))
+        logger.warn('CSRF form_key mismatch received=%s expected[redacted]=%s' % (key, getFormKey()[-4:]))
 
     return match
 
@@ -1390,7 +1430,7 @@ def doesFormKeyMatchCookie(key):
         logger.warn('CSRF form_key mismatch; cookie not present in request')
         return False
     elif cookie_val.value != key:
-        logger.warn('CSRF form_key mismatch with cookie received=%s cookie=%s' % (key, cookie_val))
+        logger.warn('CSRF form_key mismatch with cookie received=%s cookie[redacted]=%s' % (key, cookie_val[-4:]))
         return False
 
     return True
@@ -1554,172 +1594,6 @@ def add_url_params(url, params):
     url_parts[4] = urllib_parse.urlencode(query)
     return urllib_parse.urlunparse(url_parts)
 
-if __name__ == '__main__':
-
-    import unittest
-
-    class MainTest(unittest.TestCase):
-
-        def setUp(self):
-            cherrypy.config['staticAssetId'] = random.randint(0, 100000)
-            cherrypy.request.lang = "en-US"
-            cherrypy.request.config = {'root_endpoint': '/'}
-
-        def test_path_split(self):
-            path = os.sep + "foo" + os.sep + "bar" + os.sep + "baz" + os.sep
-            split = path_split(path)
-            self.assertEquals(len(split), 3)
-            self.assertEquals(split[0], "foo")
-            self.assertEquals(split[1], "bar")
-            self.assertEquals(split[2], "baz")
-
-        def test_is_valid_template_path(self):
-            splunk_home = os.environ["SPLUNK_HOME"]
-            optional_paths = [os.path.join(splunk_home, "bar", "foo")]
-
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "nottemplates"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates", "foo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates", "bar", "foo.html"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "notmodules"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules", "foo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules", "bar", "foo.html"), optional_paths=optional_paths))
-
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk"), optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "nottemplates"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates", "foo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates", "bar", "foo.html"), optional_paths=optional_paths))
-
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "notmodules"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules", "foo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules", "bar", "foo.html"), optional_paths=optional_paths))
-
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo"), optional_paths=optional_paths))
-            self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "boo", "barfoo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo", "barfoo.html"), optional_paths=optional_paths))
-            self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo", "barfoo", "barfoo.html"), optional_paths=optional_paths))
-
-        def test_convert_to_bytes(self):
-
-            self.assertEquals(convert_to_bytes('0'), 0)
-            self.assertEquals(convert_to_bytes('0B'), 0)
-            self.assertEquals(convert_to_bytes('10MB'), 10485760)
-            self.assertEquals(convert_to_bytes('40 GB'), 42949672960)
-            self.assertEquals(convert_to_bytes('-100KB'), -102400)
-            self.assertEquals(convert_to_bytes('-100'), -100)
-            self.assertEquals(convert_to_bytes('123456789012345678901234567890'), 123456789012345678901234567890)
-            self.assertRaises(ValueError, convert_to_bytes, None)
-            self.assertRaises(ValueError, convert_to_bytes, '')
-            self.assertRaises(ValueError, convert_to_bytes, 'nonsense')
-            self.assertRaises(ValueError, convert_to_bytes, 'GB')
-            self.assertRaises(ValueError, convert_to_bytes, 0)
-            self.assertRaises(ValueError, convert_to_bytes, 23)
-
-        def XXtestGetPercentiles(self):
-
-            self.assertEquals(getPercentiles([], .05, .95), (None, None))
-            self.assertEquals(getPercentiles([0, 1], .05, .95), (.05, .95))
-            self.assertEquals(getPercentiles(list(range(11)), .05, .95), (1.5, 9.5))
-            self.assertEquals(getPercentiles(list(range(101)), .05, .95), (15, 95))
-
-        def test_isEpochTime(self):
-            self.assertEquals(isEpochTimeArg("123123421.159"), True)
-            self.assertEquals(isEpochTimeArg("123123421.000"), True)
-            self.assertEquals(isEpochTimeArg("123123421.040"), True)
-            self.assertEquals(isEpochTimeArg("fred"), False)
-            self.assertEquals(isEpochTimeArg("-1d@d"), False)
-
-        def test_basic_replacement(self):
-            string = "One $one$ two, $two$."
-            expect = "One foo two, bar."
-            found = replace_vars(string, {'one': 'foo', 'two': 'bar'})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_escaping_replacement(self):
-            string = "One $one$ two, \\\\\\$two\\$ $three$\\"
-            expect = "One foo two, \\$two$ bar"
-            found = replace_vars(string, {'one': 'foo', 'three': 'bar'})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_escape_variable_in_replacement(self):
-            string = "one $two\\$$"
-            expect = "one bar"
-            found = replace_vars(string, {'two$': 'bar'})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_unclosed_variable(self):
-            string = "one $two three four \\$ five"
-            expect = "one $two three four $ five"
-            found = replace_vars(string, {})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_spaces_in_variables(self):
-            string = "one $two three$ four"
-            expect = "one bar four"
-            found = replace_vars(string, {'two three': 'bar'})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_retain_escapes(self):
-            string = "one $two\\$three$ $four$"
-            expect = "one $two\\$three$ bar"
-            found = replace_vars(string, {'four': 'bar'}, retain_escape=True)
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-            string = r"one \$@two\$ three"
-            expect = r"one \$@two\$ three"
-            found = replace_vars(string, {'two': 'two'}, retain_escape=True, open_delimiter="$@")
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_change_delimiters(self):
-            string = "one $@field_value$ two"
-            expect = "one bar two"
-            found = replace_vars(string, {'field_value': 'bar'}, open_delimiter="$@")
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_make_url(self):
-            string = "/i18ncatalog?autoload=1"
-            found = make_url(string)
-            self.assertTrue("version=" in found)
-
-        def test_make_url_js_i18n(self):
-            string = "/static/js/i18n.js"
-            expect = "/en-US/static/" + static_asset_version() + "/js/i18n.js"
-            found = make_url(string)
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_make_url_common(self):
-            string = "/static/build/pages/enterprise/common.js"
-            expect = "/en-US/static/" + static_asset_version() + "/build/pages/enterprise/common.js"
-            found = make_url(string)
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_add_url_param(self):
-            string = "i18ncatalog"
-            expect = "i18ncatalog?version=1"
-            found = add_url_params(string, {'version': '1'})
-            self.assertEquals(found, expect, "Did not find '%s', found '%s'." % (expect, found))
-
-        def test_add_second_url_param(self):
-            string = "i18ncatalog?autoload=1"
-            expect1 = "i18ncatalog?version=1&autoload=1"
-            expect2 = "i18ncatalog?autoload=1&version=1"
-            found = add_url_params(string, {'version': '1'})
-            self.assertTrue(found == expect1 or found == expect2)
-
-    # run tests
-    suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
-    unittest.TextTestRunner(verbosity=2).run(suite)
-
-
 ##
 # these are all i18n code that is required to be here
 def current_lang(as_string=False): # moved from util
@@ -1777,3 +1651,189 @@ def strip_i18n_url(path):  # moved from util
     Return a URL path stripped of the root_endpoint prefix and the en-US segment
     """
     return '/' + path[len(cherrypy.request.script_name)+7:]
+
+
+
+import unittest
+
+class MainTest(unittest.TestCase):
+
+    def setUp(self):
+        cherrypy.config['staticAssetId'] = random.randint(0, 100000)
+        cherrypy.request.lang = "en-US"
+        cherrypy.request.config = {'root_endpoint': '/'}
+
+    def test_path_split(self):
+        path = os.sep + "foo" + os.sep + "bar" + os.sep + "baz" + os.sep
+        split = path_split(path)
+        self.assertEqual(len(split), 3)
+        self.assertEqual(split[0], "foo")
+        self.assertEqual(split[1], "bar")
+        self.assertEqual(split[2], "baz")
+
+    def test_is_valid_template_path(self):
+        splunk_home = os.environ["SPLUNK_HOME"]
+        optional_paths = [os.path.join(splunk_home, "bar", "foo")]
+
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "nottemplates"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates", "foo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "templates", "bar", "foo.html"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "notmodules"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules", "foo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "etc", "apps", "foo", "appserver", "modules", "bar", "foo.html"), optional_paths=optional_paths))
+
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk"), optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "nottemplates"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates", "foo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "templates", "bar", "foo.html"), optional_paths=optional_paths))
+
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "notmodules"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules", "foo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "share", "splunk", "search_mrsparkle", "modules", "bar", "foo.html"), optional_paths=optional_paths))
+
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo"), optional_paths=optional_paths))
+        self.assertFalse(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "boo", "barfoo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo", "barfoo.html"), optional_paths=optional_paths))
+        self.assertTrue(is_valid_template_path(splunk_home, os.path.join(splunk_home, "bar", "foo", "barfoo", "barfoo.html"), optional_paths=optional_paths))
+
+    def test_convert_to_bytes(self):
+
+        self.assertEqual(convert_to_bytes('0'), 0)
+        self.assertEqual(convert_to_bytes('0B'), 0)
+        self.assertEqual(convert_to_bytes('10MB'), 10485760)
+        self.assertEqual(convert_to_bytes('40 GB'), 42949672960)
+        self.assertEqual(convert_to_bytes('-100KB'), -102400)
+        self.assertEqual(convert_to_bytes('-100'), -100)
+        self.assertEqual(convert_to_bytes('123456789012345678901234567890'), 123456789012345678901234567890)
+        self.assertRaises(ValueError, convert_to_bytes, None)
+        self.assertRaises(ValueError, convert_to_bytes, '')
+        self.assertRaises(ValueError, convert_to_bytes, 'nonsense')
+        self.assertRaises(ValueError, convert_to_bytes, 'GB')
+        self.assertRaises(ValueError, convert_to_bytes, 0)
+        self.assertRaises(ValueError, convert_to_bytes, 23)
+
+    def XXtestGetPercentiles(self):
+
+        self.assertEqual(getPercentiles([], .05, .95), (None, None))
+        self.assertEqual(getPercentiles([0, 1], .05, .95), (.05, .95))
+        self.assertEqual(getPercentiles(list(range(11)), .05, .95), (1.5, 9.5))
+        self.assertEqual(getPercentiles(list(range(101)), .05, .95), (15, 95))
+
+    def test_isEpochTime(self):
+        self.assertEqual(isEpochTimeArg("123123421.159"), True)
+        self.assertEqual(isEpochTimeArg("123123421.000"), True)
+        self.assertEqual(isEpochTimeArg("123123421.040"), True)
+        self.assertEqual(isEpochTimeArg("fred"), False)
+        self.assertEqual(isEpochTimeArg("-1d@d"), False)
+
+    def test_basic_replacement(self):
+        string = "One $one$ two, $two$."
+        expect = "One foo two, bar."
+        found = replace_vars(string, {'one': 'foo', 'two': 'bar'})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_escaping_replacement(self):
+        string = "One $one$ two, \\\\\\$two\\$ $three$\\"
+        expect = "One foo two, \\$two$ bar"
+        found = replace_vars(string, {'one': 'foo', 'three': 'bar'})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_escape_variable_in_replacement(self):
+        string = "one $two\\$$"
+        expect = "one bar"
+        found = replace_vars(string, {'two$': 'bar'})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_unclosed_variable(self):
+        string = "one $two three four \\$ five"
+        expect = "one $two three four $ five"
+        found = replace_vars(string, {})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_spaces_in_variables(self):
+        string = "one $two three$ four"
+        expect = "one bar four"
+        found = replace_vars(string, {'two three': 'bar'})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_retain_escapes(self):
+        string = "one $two\\$three$ $four$"
+        expect = "one $two\\$three$ bar"
+        found = replace_vars(string, {'four': 'bar'}, retain_escape=True)
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+        string = r"one \$@two\$ three"
+        expect = r"one \$@two\$ three"
+        found = replace_vars(string, {'two': 'two'}, retain_escape=True, open_delimiter="$@")
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_change_delimiters(self):
+        string = "one $@field_value$ two"
+        expect = "one bar two"
+        found = replace_vars(string, {'field_value': 'bar'}, open_delimiter="$@")
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_make_url(self):
+        string = "/i18ncatalog?autoload=1"
+        found = make_url(string)
+        self.assertTrue("version=" in found)
+
+    def test_make_url_js_i18n(self):
+        string = "/static/js/i18n.js"
+        expect = "/en-US/static/" + static_asset_version() + "/js/i18n.js"
+        found = make_url(string)
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_make_url_common(self):
+        string = "/static/build/pages/enterprise/common.js"
+        expect = "/en-US/static/" + static_asset_version() + "/build/pages/enterprise/common.js"
+        found = make_url(string)
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_add_url_param(self):
+        string = "i18ncatalog"
+        expect = "i18ncatalog?version=1"
+        found = add_url_params(string, {'version': '1'})
+        self.assertEqual(found, expect, "Did not find '%s', found '%s'." % (expect, found))
+
+    def test_add_second_url_param(self):
+        string = "i18ncatalog?autoload=1"
+        expect1 = "i18ncatalog?version=1&autoload=1"
+        expect2 = "i18ncatalog?autoload=1&version=1"
+        found = add_url_params(string, {'version': '1'})
+        self.assertTrue(found == expect1 or found == expect2)
+
+
+class DictToLoggableString(unittest.TestCase):
+    def test_no_dict(self):
+        dict = None
+        loggable_string = dict_to_loggable_string(dict)
+        self.assertEqual(loggable_string, '')
+
+    def test_integer_keys(self):
+        dict = { 1: 'a', 2: 'b' }
+        loggable_string = dict_to_loggable_string(dict)
+        self.assertEqual(loggable_string, '1=a, 2=b')
+
+    def test_integer_values(self):
+        dict = { 'a': 1, 'b': 2 }
+        loggable_string = dict_to_loggable_string(dict)
+        self.assertEqual(loggable_string, 'a=1, b=2')
+
+if __name__ == '__main__':
+    # run tests
+    suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
+    unittest.TextTestRunner(verbosity=2).run(suite)
+
+    suite = unittest.TestLoader().loadTestsFromTestCase(DictToLoggableString)
+    unittest.TextTestRunner(verbosity=2).run(suite)

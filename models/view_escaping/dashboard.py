@@ -133,73 +133,77 @@ class SimpleDashboard(object):
         return False
 
 
+#
+# Unittests
+#
+import unittest
+
+from splunk.models.view_escaping.forminput import BaseInput
+from splunk.models.view_escaping.panel import Panel
+from splunk.models.view_escaping.panelElement import BasePanel
+from splunk.models.view_escaping.row import Row
+from splunk.models.view_escaping.search import Search
+
+class SimpleDashboardTests(unittest.TestCase):
+    def testAllElementsGenerator(self):
+        dashboard = SimpleDashboard()
+        dashboard.rows.append(Row())
+        dashboard.rows.append(Row())
+        dashboard.rows[0].panels.append(Panel())
+        dashboard.rows[0].panels.append(Panel())
+        dashboard.rows[1].panels.append(Panel())
+        dashboard.rows[0].panels[0].panelElements.append(1)
+        dashboard.rows[0].panels[0].panelElements.append(2)
+        dashboard.rows[0].panels[1].panelElements.append(3)
+        dashboard.rows[1].panels[0].panelElements.append(4)
+
+        result = []
+        for el in dashboard.all_elements():
+            result.append(el)
+
+        self.assertEqual(4, len(result))
+        self.assertTrue(1 in result)
+        self.assertTrue(2 in result)
+        self.assertTrue(3 in result)
+        self.assertTrue(4 in result)
+
+    def testFieldsJSON(self):
+        dashboard = SimpleDashboard()
+        dashboard.rows.append(Row())
+        self.assertEqual('[]', dashboard.getFieldJSON())
+
+        input = BaseInput()
+        input.id = 'input1'
+        dashboard.fieldset.append(input)
+        self.assertEqual('[input1]', dashboard.getFieldJSON())
+
+        input = BaseInput()
+        input.id = 'input2'
+        dashboard.fieldset.append(input)
+        self.assertEqual('[input1,input2]', dashboard.getFieldJSON())
+
+    def testSearchesJSON(self):
+        dashboard = SimpleDashboard()
+        self.assertEqual('[]', dashboard.getSearchesJSON())
+        dashboard.rows.append(Row())
+        dashboard.rows[0].panels.append(Panel())
+        el = BasePanel()
+        dashboard.rows[0].panels[0].panelElements.append(el)
+        el.searchCommand = "search index=_internal"
+        el.searchEarliestTime = '-24h'
+        el.search = Search()
+        el.search.id = 'search1'
+        self.assertEqual('[search1]', dashboard.getSearchesJSON())
+        el = BasePanel()
+        dashboard.rows[0].panels[0].panelElements.append(el)
+        el.searchCommand = "search index=_internal"
+        el.searchEarliestTime = '-24h'
+        el.search = Search()
+        el.search.id = 'search2'
+        self.assertEqual('[search1,search2]', dashboard.getSearchesJSON())
+
+
 if __name__ == '__main__':
-    import unittest
-
-    from splunk.models.view_escaping.forminput import BaseInput
-    from splunk.models.view_escaping.panel import Panel
-    from splunk.models.view_escaping.panelElement import BasePanel
-    from splunk.models.view_escaping.row import Row
-    from splunk.models.view_escaping.search import Search
-
-    class SimpleDashboardTests(unittest.TestCase):
-        def testAllElementsGenerator(self):
-            dashboard = SimpleDashboard()
-            dashboard.rows.append(Row())
-            dashboard.rows.append(Row())
-            dashboard.rows[0].panels.append(Panel())
-            dashboard.rows[0].panels.append(Panel())
-            dashboard.rows[1].panels.append(Panel())
-            dashboard.rows[0].panels[0].panelElements.append(1)
-            dashboard.rows[0].panels[0].panelElements.append(2)
-            dashboard.rows[0].panels[1].panelElements.append(3)
-            dashboard.rows[1].panels[0].panelElements.append(4)
-
-            result = []
-            for el in dashboard.all_elements():
-                result.append(el)
-
-            self.assertEquals(4, len(result))
-            self.assertTrue(1 in result)
-            self.assertTrue(2 in result)
-            self.assertTrue(3 in result)
-            self.assertTrue(4 in result)
-
-        def testFieldsJSON(self):
-            dashboard = SimpleDashboard()
-            dashboard.rows.append(Row())
-            self.assertEquals('[]', dashboard.getFieldJSON())
-
-            input = BaseInput()
-            input.id = 'input1'
-            dashboard.fieldset.append(input)
-            self.assertEquals('[input1]', dashboard.getFieldJSON())
-
-            input = BaseInput()
-            input.id = 'input2'
-            dashboard.fieldset.append(input)
-            self.assertEquals('[input1,input2]', dashboard.getFieldJSON())
-
-        def testSearchesJSON(self):
-            dashboard = SimpleDashboard()
-            self.assertEquals('[]', dashboard.getSearchesJSON())
-            dashboard.rows.append(Row())
-            dashboard.rows[0].panels.append(Panel())
-            el = BasePanel()
-            dashboard.rows[0].panels[0].panelElements.append(el)
-            el.searchCommand = "search index=_internal"
-            el.searchEarliestTime = '-24h'
-            el.search = Search()
-            el.search.id = 'search1'
-            self.assertEquals('[search1]', dashboard.getSearchesJSON())
-            el = BasePanel()
-            dashboard.rows[0].panels[0].panelElements.append(el)
-            el.searchCommand = "search index=_internal"
-            el.searchEarliestTime = '-24h'
-            el.search = Search()
-            el.search.id = 'search2'
-            self.assertEquals('[search1,search2]', dashboard.getSearchesJSON())
-
     loader = unittest.TestLoader()
     suites = []
     suites.append(loader.loadTestsFromTestCase(SimpleDashboardTests))

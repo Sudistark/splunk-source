@@ -501,39 +501,39 @@ class AppNav(object):
         return (True, uriParts.scheme)
 
 # tests
+import unittest
+class UriSchemeProhibitionTest(unittest.TestCase):
+
+    def testAllowed(self):
+        allowedUris = [ "http://google.com",
+                        "https://google.com",
+                        "otherview",
+                        "/app/otherapp/otherview",
+                        "/manager/otherapp/otherview",
+                        "mailto:arobbins@splunk.com",
+                        " ",
+                        "<a>",
+                        "&lt;a&gt;" ]
+
+        appnav = AppNav("test")
+        for uri in allowedUris:
+            (allowed, scheme) = appnav._isAllowedUriScheme(uri)
+            self.assertEqual(allowed, True)
+
+    def testProhibited(self):
+        prohibitedUris = [  "javascript:alert('HACKED!');",
+                            " javascript:alert('HACKED!');",
+                            "javascript:alert('HACKED!'); ",
+                            "java&#09;script&#09;:alert('HACKED!');",
+                            "java&#13;script&#13;:alert('HACKED!');" ]
+
+        appnav = AppNav("test")
+        for uri in prohibitedUris:
+            (allowed, scheme) = appnav._isAllowedUriScheme(uri)
+            self.assertEqual(allowed, False)
+
+
 if __name__ == '__main__':
-
-    import unittest
-    class UriSchemeProhibitionTest(unittest.TestCase):
-
-        def testAllowed(self):
-            allowedUris = [ "http://google.com",
-                            "https://google.com",
-                            "otherview",
-                            "/app/otherapp/otherview",
-                            "/manager/otherapp/otherview",
-                            "mailto:arobbins@splunk.com",
-                            " ",
-                            "<a>",
-                            "&lt;a&gt;" ]
-
-            appnav = AppNav("test")
-            for uri in allowedUris:
-                (allowed, scheme) = appnav._isAllowedUriScheme(uri)
-                self.assertEquals(allowed, True)
-
-        def testProhibited(self):
-            prohibitedUris = [  "javascript:alert('HACKED!');",
-                                " javascript:alert('HACKED!');",
-                                "javascript:alert('HACKED!'); ",
-                                "java&#09;script&#09;:alert('HACKED!');",
-                                "java&#13;script&#13;:alert('HACKED!');" ]
-
-            appnav = AppNav("test")
-            for uri in prohibitedUris:
-                (allowed, scheme) = appnav._isAllowedUriScheme(uri)
-                self.assertEquals(allowed, False)
-
     # exec all tests
     loader = unittest.TestLoader()
     suites = []

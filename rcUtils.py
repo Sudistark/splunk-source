@@ -9,7 +9,7 @@ import types
 import stat
 import os
 
-import lxml.etree as etree
+import splunk.safe_lxml_etree as etree
 
 from splunk.rcCmds import remote_cmds, GLOBAL_ARGS, GLOBAL_ACTIONS, GLOBAL_DEFAULTS
 from splunk.entity import buildEndpoint
@@ -670,79 +670,81 @@ def makeRestCall(cmd=None, restArgList=None, obj=None, sessionKey=None, entityNa
    
 # --------------------------
 # --------------------------
-if __name__ == '__main__':
-    
-   # -----------------------------------------
-   class LayeredFindTests(unittest.TestCase):
-      """
-      tests cases for the layeredFind function
-      """
+# -----------------------------------------
+class LayeredFindTests(unittest.TestCase):
+  """
+  tests cases for the layeredFind function
+  """
 
-      # ---------------------------
-      def testLayeredFind1(self):
-         """
-         check if the uri for the login endpoint is extracted correctly
-         """
-         self.assertEqual(layeredFind('login', 'login', '', 'uri'), '/auth/login/') 
+  # ---------------------------
+  def testLayeredFind1(self):
+     """
+     check if the uri for the login endpoint is extracted correctly
+     """
+     self.assertEqual(layeredFind('login', 'login', '', 'uri'), '/auth/login/') 
 
-   # -------------------------------------------
-   class MakeRestCallTests(unittest.TestCase):
-      """
-      tests cases for the makeRestCall function
-      """
+# -------------------------------------------
+from splunk.util import pytest_mark_skip_conditional
+@pytest_mark_skip_conditional(reason="SPL-175665: Probably a regression or functional test now")
+class MakeRestCallTests(unittest.TestCase):
+  """
+  tests cases for the makeRestCall function
+  """
 
-      # ---------------
-      def setUp(self):
-         """
-         init stuff like getting the session key for requests
-         """
-         self.sessionKey = auth.getSessionKey(username='admin', password='changeme')
-      
-      # ---------------------------------------
-      def testMakeRestCall_no_endpoint(self):
-         """
-         this endpoint better not exist
-         """
-         self.assertRaises(NoEndpointError, makeRestCall, cmd='test', obj='testing', restArgList={}, sessionKey=self.sessionKey)
-         
-      # --------------------------------------
-      def testMakeRestCall_show_config(self):
-         """
-         show config inputs
-         """
-         retVal = makeRestCall(cmd='show', obj='config', restArgList={'name':'inputs'}, sessionKey=self.sessionKey)      
-         self.assertTrue(retVal != '')
+  # ---------------
+  def setUp(self):
+     """
+     init stuff like getting the session key for requests
+     """
+     self.sessionKey = auth.getSessionKey(username='admin', password='changeme')
+  
+  # ---------------------------------------
+  def testMakeRestCall_no_endpoint(self):
+     """
+     this endpoint better not exist
+     """
+     self.assertRaises(NoEndpointError, makeRestCall, cmd='test', obj='testing', restArgList={}, sessionKey=self.sessionKey)
+     
+  # --------------------------------------
+  def testMakeRestCall_show_config(self):
+     """
+     show config inputs
+     """
+     retVal = makeRestCall(cmd='show', obj='config', restArgList={'name':'inputs'}, sessionKey=self.sessionKey)      
+     self.assertTrue(retVal != '')
 
-      # ---------------------------------------
-      def xtestMakeRestCall_show_license(self):
-         """
-         show license
-         THIS HAS BEEN COMMENTED OUT AS THE '/license' ENDPOINT NO LONGER EXISTS - SPL-34139
-         THIS COMMAND HAS NOW BEEN DEPRECATED
-         THE NEW COMMAND IS 'list license'. THE CODE/UNIT TESTS HAVE BEEN MOVED TO C-LAND
-         SEE 'list license' INSTEAD
-         """
-         retVal = makeRestCall(cmd='show', obj='license', restArgList={}, sessionKey=self.sessionKey)
-         self.assertTrue(retVal != '')
+  # ---------------------------------------
+  def xtestMakeRestCall_show_license(self):
+     """
+     show license
+     THIS HAS BEEN COMMENTED OUT AS THE '/license' ENDPOINT NO LONGER EXISTS - SPL-34139
+     THIS COMMAND HAS NOW BEEN DEPRECATED
+     THE NEW COMMAND IS 'list license'. THE CODE/UNIT TESTS HAVE BEEN MOVED TO C-LAND
+     SEE 'list license' INSTEAD
+     """
+     retVal = makeRestCall(cmd='show', obj='license', restArgList={}, sessionKey=self.sessionKey)
+     self.assertTrue(retVal != '')
 
-      # -------------------------------------------------
-      def testMakeRestCall_show_default_hostname(self):
-         """ 
-         show default-hostname
-         """
-         retVal = makeRestCall(cmd='show', obj='default-hostname', restArgList={}, sessionKey=self.sessionKey)
-         self.assertTrue(retVal != '')
+  # -------------------------------------------------
+  def testMakeRestCall_show_default_hostname(self):
+     """ 
+     show default-hostname
+     """
+     retVal = makeRestCall(cmd='show', obj='default-hostname', restArgList={}, sessionKey=self.sessionKey)
+     self.assertTrue(retVal != '')
 
-      # ----------------------------------------------
-      def testMakeRestCall_show_datastore_dir(self):
-         """
-         show datastore-dir
-         """
-         retVal = makeRestCall(cmd='show', obj='datastore-dir', restArgList={}, sessionKey=self.sessionKey)
-         self.assertTrue(retVal != '')
+  # ----------------------------------------------
+  def testMakeRestCall_show_datastore_dir(self):
+     """
+     show datastore-dir
+     """
+     retVal = makeRestCall(cmd='show', obj='datastore-dir', restArgList={}, sessionKey=self.sessionKey)
+     self.assertTrue(retVal != '')
 
-   suite1 = unittest.TestLoader().loadTestsFromTestCase(LayeredFindTests)
-   suite2 = unittest.TestLoader().loadTestsFromTestCase(MakeRestCallTests)
-   
-   alltests = unittest.TestSuite([suite1, suite2])
-   unittest.TextTestRunner(verbosity=2).run(alltests)
+if __name__ == "__main__":
+    suite1 = unittest.TestLoader().loadTestsFromTestCase(LayeredFindTests)
+    suite2 = unittest.TestLoader().loadTestsFromTestCase(MakeRestCallTests)
+
+    alltests = unittest.TestSuite([suite1, suite2])
+    unittest.TextTestRunner(verbosity=2).run(alltests)
+

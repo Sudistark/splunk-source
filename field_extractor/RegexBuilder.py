@@ -46,8 +46,8 @@ ONLY_NUMBERS = mycompile(r'^[\d]+$')
 
 def myescape(s):
     return re.escape(s)
-    
-    
+
+
 def deduplist(seq):
     ''' Deduplicate given list.
     Why assign seen.add to seen_add instead of just calling seen.add? 
@@ -1341,67 +1341,70 @@ def timethis(func):
     return wrapper
 
 
+@unittest.skip("ToDo: Move to functional tests as it depends on Splunk being up and running")
 class Test(unittest.TestCase):
 #    @timethis
     def __init__(self, *arg, **kwargs):
         self.timer = Timer()
         super(Test, self).__init__(*arg, **kwargs)
-        owner = 'admin'
-        self.hostPath='https://wimpy.splunk.com:9040'
-        self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=self.hostPath)
-        query = 'search source="/home/nnguyen/mydata/alcatel.1k.log"'
-        job = splunk.search.dispatch(query, hostPath=self.hostPath, sessionKey=self.sessionKey)
-        self.sid = job.sid
-        self.maxDiff = None
-        class NewRule(TableUINewRule):
-            '''
-                Define this class here so that adding more match rules in the future
-                won't break these tests.
-            '''
-            def startingRegexes(self, data):
-                return (
-                        NthCharacterStartingRegex(data),
-                        NSpacesAndStartingCharacterStartingRegex(data),
-                        IrregularCharactersStartingRegex(data),
-                        NCharactersStartingRegex(data),
-                        AnyCharactersStartingRegex(data),
-                        NSpacesAndIrregularCharactersStartingRegex(data),
-                        NSpacesAndPrecedingStringStartingRegex(data),
-                        NSpacesAndPrecedingWordStartingRegex(data),
-                        PrecedingWordStartingRegex(data),
-                        PrecedingStringStartingRegex(data),
-                        NCommasAndPrecedingCharacterStartingRegex(data),
-                        StartOfStringStartingRegex(data),
-                        FieldNameStartingRegex(data),
-                        AfterLiteralStartingRegex(data),
-                    )
-            def extractionRegexes(self, data):
-                return (
-                        AnyCharacterButFollowingCharacterExtractionRegex(data),
-                        NumberOfCharactersExtractionRegex(data),
-                        WordCharactersAndContainedIrregularCharactersExtractionRegex(data),
-                        AnyCharacterExtractionRegex(data),
-                        EndOfStringExtractionRegex(data),
-                        LettersExtractionRegex(data),
-                        LowercaseLettersExtractionRegex(data),
-                        UppercaseLettersExtractionRegex(data),
-                        WordCharactersExtractionRegex(data),
-                        NumbersExtractionRegex(data),
-                    )
-            def stoppingRegexes(self, data):
-                return (
-                        FollowingCharacterStoppingRegex(data),
-                        AnyCharacterStoppingRegex(data)
-                    )
+        '''
+            owner = 'admin'
+            self.hostPath='https://wimpy.splunk.com:9040'
+            self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=self.hostPath)
+            query = 'search source="/home/nnguyen/mydata/alcatel.1k.log"'
+            job = splunk.search.dispatch(query, hostPath=self.hostPath, sessionKey=self.sessionKey)
+            self.sid = job.sid
+            self.maxDiff = None
+            class NewRule(TableUINewRule):
+                  
+                     # Define this class here so that adding more match rules in the future
+                     # won't break these tests.
+                  
+                  def startingRegexes(self, data):
+                     return (
+                              NthCharacterStartingRegex(data),
+                              NSpacesAndStartingCharacterStartingRegex(data),
+                              IrregularCharactersStartingRegex(data),
+                              NCharactersStartingRegex(data),
+                              AnyCharactersStartingRegex(data),
+                              NSpacesAndIrregularCharactersStartingRegex(data),
+                              NSpacesAndPrecedingStringStartingRegex(data),
+                              NSpacesAndPrecedingWordStartingRegex(data),
+                              PrecedingWordStartingRegex(data),
+                              PrecedingStringStartingRegex(data),
+                              NCommasAndPrecedingCharacterStartingRegex(data),
+                              StartOfStringStartingRegex(data),
+                              FieldNameStartingRegex(data),
+                              AfterLiteralStartingRegex(data),
+                        )
+                  def extractionRegexes(self, data):
+                     return (
+                              AnyCharacterButFollowingCharacterExtractionRegex(data),
+                              NumberOfCharactersExtractionRegex(data),
+                              WordCharactersAndContainedIrregularCharactersExtractionRegex(data),
+                              AnyCharacterExtractionRegex(data),
+                              EndOfStringExtractionRegex(data),
+                              LettersExtractionRegex(data),
+                              LowercaseLettersExtractionRegex(data),
+                              UppercaseLettersExtractionRegex(data),
+                              WordCharactersExtractionRegex(data),
+                              NumbersExtractionRegex(data),
+                        )
+                  def stoppingRegexes(self, data):
+                     return (
+                              FollowingCharacterStoppingRegex(data),
+                              AnyCharacterStoppingRegex(data)
+                        )
 
-        class ExistingRule(TableUIExistingRule):
-            def setOptional(self):
-                self._newRule = NewRule()
+            class ExistingRule(TableUIExistingRule):
+                  def setOptional(self):
+                     self._newRule = NewRule()
 
-        self._newRule = NewRule()
-        self._newRule.setSessionKey(self.sessionKey)
-        self._existingRule = ExistingRule()
-        self._existingRule.setSessionKey(self.sessionKey)
+            self._newRule = NewRule()
+            self._newRule.setSessionKey(self.sessionKey)
+            self._existingRule = ExistingRule()
+            self._existingRule.setSessionKey(self.sessionKey)
+        '''
 
     def case1(self):
         required_args = {
@@ -2354,6 +2357,16 @@ class Test(unittest.TestCase):
            ]
         }
         self.assertEqual(results, correct)
+
+    def case33(self):
+        ''' 
+            * rule_to_str() function is deprecated as its not used anymore
+            * Testing the toUnicode() function in splunk.util
+            * toUnicode() does what to_str() used to that was used by rule_to_str()
+        '''
+        rule = u'^.*?Fran\xe7ais\='
+        rule_str = "^.*?Français\\="
+        self.assertEqual(toUnicode(rule), rule_str)
 
     def case34(self):
         data = {
@@ -3968,17 +3981,20 @@ class Test(unittest.TestCase):
             getattr(self, test_case)()
 
 
+@unittest.skip("ToDo: Move to functional tests as it depends on Splunk being up and running")
 class Test2(unittest.TestCase):
     def __init__(self, *arg, **kwargs):
         super(Test2, self).__init__(*arg, **kwargs)
-        owner = 'admin'
-        hostPath='https://wimpy.splunk.com:9040'
-        self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=hostPath)
-        query = 'search source="/home/nnguyen/mydata/product_downloads_scrubbed.log"'
-        job = splunk.search.dispatch(query, hostPath=hostPath, sessionKey=self.sessionKey)
-        self.sid = job.sid
-        self.maxDiff = None
- 
+        '''
+            owner = 'admin'
+            hostPath='https://wimpy.splunk.com:9040'
+            self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=hostPath)
+            query = 'search source="/home/nnguyen/mydata/product_downloads_scrubbed.log"'
+            job = splunk.search.dispatch(query, hostPath=hostPath, sessionKey=self.sessionKey)
+            self.sid = job.sid
+            self.maxDiff = None
+        '''
+    
     def testEventRetrieval(self, data, correct):
         data.update({'sid': self.sid, 'type': 'events', 'field': '_raw', 'count': 2})
         result  = TableUIEvents().setSessionKey(self.sessionKey).results(data)
@@ -4187,27 +4203,29 @@ class Test2(unittest.TestCase):
             getattr(self, test_case)()
 
 
-
+@unittest.skip("ToDo: Move to functional tests as it depends on Splunk being up and running")
 class RemoteTest(unittest.TestCase):
     '''
         Test the REST endpoint /services/field_extractor/generate_regex
     '''
     def __init__(self, *args, **kwargs):
         super(RemoteTest, self).__init__(*args, **kwargs)
-        owner = 'admin'
-        password = 'changeme'
-        self.hostPath='https://wimpy.splunk.com:9040'
-        restEndPoint = "/services/field_extractor/generate_regex"
-        self.url = self.hostPath + restEndPoint
-        self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=self.hostPath)
-        query = 'search source="/home/nnguyen/mydata/alcatel.1k.log" '
-        job = splunk.search.dispatch(query, hostPath=self.hostPath, sessionKey=self.sessionKey)
-        self.sid = job.sid
-        import httplib2
-        self.http = httplib2.Http(".cache", disable_ssl_certificate_validation=True)
-        self.http.add_credentials(owner, password)
-        self.maxDiff = None
-
+        ''' 
+            owner = 'admin'
+            password = 'changeme'
+            self.hostPath='https://wimpy.splunk.com:9040'
+            restEndPoint = "/services/field_extractor/generate_regex"
+            self.url = self.hostPath + restEndPoint
+            self.sessionKey = splunk.auth.getSessionKey('admin', 'changeme', hostPath=self.hostPath)
+            query = 'search source="/home/nnguyen/mydata/alcatel.1k.log" '
+            job = splunk.search.dispatch(query, hostPath=self.hostPath, sessionKey=self.sessionKey)
+            self.sid = job.sid
+            import httplib2
+            self.http = httplib2.Http(".cache", disable_ssl_certificate_validation=True)
+            self.http.add_credentials(owner, password)
+            self.maxDiff = None
+        '''
+    
     def httprequest(self, data, method='GET'):
         from future.moves.urllib import parse as urllib_parse
 
@@ -4666,3 +4684,12 @@ class RemoteTest(unittest.TestCase):
             test_case = 'case%d'%i
             print('testing ' + test_case)
             getattr(self, test_case)()
+
+
+if __name__ == "__main__":
+    suite1 = unittest.TestLoader().loadTestsFromTestCase(Test)
+    suite2 = unittest.TestLoader().loadTestsFromTestCase(Test2)
+    suite3 = unittest.TestLoader().loadTestsFromTestCase(RemoteTest)
+
+    alltests = unittest.TestSuite([suite1, suite2, suite3])
+    unittest.TextTestRunner(verbosity=2).run(alltests)

@@ -979,9 +979,7 @@ def indent(rows, hasHeader=False, headerChar='-', delim='  ', justify='left',
     """Indents a table by column.
 
     >>> indent([['count'], [u'0']], hasHeader=False, separateRows=False)
-    count
-    -----
-    0
+    'count\\n0    \\n'
 
     :param rows: Sequence of sequences of items, one sequence per row.
     :param hasHeader: True if the first row consists of the columns' names.

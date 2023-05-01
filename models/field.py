@@ -280,20 +280,21 @@ class FloatByteField(Field):
     
     Assume that you have defined:
 
-        mod = Foo()
-            f1 = Field()
-            f2 = FloatByteField()
+        >>> class Foo(): pass
+        >>> mod = Foo()
+        >>> mod.f1 = Field()
+        >>> mod.f2 = FloatByteField().from_apidata({'eai_value': '1234MB'}, attrname='eai_value')
 
     Then:
 
-        mod.f2['byte_value']
-        >>> 1293942784
-        mod.f2['relative_value']
-        >>> 1234
-        mod.f2['units']
-        >>> 'MB'
-        mod.f2['value_mode']
-        >>> 'NORMAL'
+        >>> mod.f2['byte_value']
+        1293942784.0
+        >>> mod.f2['relative_value']
+        1234.0
+        >>> mod.f2['units']
+        'MB'
+        >>> mod.f2['value_mode']
+        'NORMAL'
     '''
 
     # define the typical setting for most byte values

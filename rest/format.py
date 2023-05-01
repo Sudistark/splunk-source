@@ -5,7 +5,7 @@
 from builtins import object
 from builtins import map
 import xml.sax.saxutils as su
-import lxml.etree as etree
+import splunk.safe_lxml_etree as etree
 import logging
 import time
 import splunk
@@ -53,12 +53,17 @@ def parseFeedDocument(inputContents, contentsAreEscaped=False):
     '''
     if contentsAreEscaped: inputContents = unescapeContents(inputContents)
     
+    if type(inputContents) == bytes: inputContents = inputContents.decode()
+    # python2 had a separate str object from the python3 unicode object. Byte
+    # arrays will fail through parseFeedDocument and return the original byte 
+    # array, unparsed 
 
     # parse XML
     try:
-        safeparser = etree.XMLParser(resolve_entities=False, huge_tree=True)
-        etree.set_default_parser(safeparser)
-        rootNode = etree.fromstring(inputContents)
+        hugeparser = etree.XMLParser(huge_tree=True)
+        # For Py3, Unicode strings with encoding declaration are not supported. 
+        # So we can either use bytes input or XML fragments without declaration encoding declaration.
+        rootNode = etree.fromstring(inputContents.encode(), parser=hugeparser)
     except Exception as e:
         logger.debug('There was an error parsing the feed document. Error: %s' % e.args[0])
         logger.debug('parseFeedDocument inputContents = %s', inputContents) 
@@ -593,208 +598,201 @@ def _listToXml(L):
     return ''.join(output)
 
                 
-                
-if __name__ == '__main__':
+import unittest
+
+class MainTest(unittest.TestCase):
     
-    import unittest
+    #
+    # the decoded string: 
+    #   'abc_\xce\xa0\xce\xa3\xce\xa9'
+    # is equivalent to:
+    #   u'abc_\u03a0\u03a3\u03a9'
+    #
     
-    class MainTest(unittest.TestCase):
+    def testStringToXml(self):
+        self.assertEqual(primitiveToXml('asdf'), 'asdf')
+        self.assertEqual(
+            primitiveToXml(b'abc_\xce\xa0\xce\xa3\xce\xa9'.decode()), 
+            u'abc_\u03a0\u03a3\u03a9')
+        self.assertEqual(
+            primitiveToXml(u'abc_\u03a0\u03a3\u03a9'), 
+            u'abc_\u03a0\u03a3\u03a9')
         
-        #
-        # the decoded string: 
-        #   'abc_\xce\xa0\xce\xa3\xce\xa9'
-        # is equivalent to:
-        #   u'abc_\u03a0\u03a3\u03a9'
-        #
+    def testListToXml(self):
+        self.assertEqual(primitiveToXml(['asdf']), '<s:list><s:item>asdf</s:item></s:list>')
+        self.assertEqual(
+            primitiveToXml(['abc_\u03a0\u03a3\u03a9']), 
+            '<s:list><s:item>abc_\u03a0\u03a3\u03a9</s:item></s:list>')
+
+
+    def testXmltoPrimitive(self):
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(u'<list><item>item1</item><item>item2</item><item>item3</item></list>')), 
+            [u'item1', u'item2', u'item3'])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(u'<dict><key name="k1">v1</key><key name="k2">v2</key><key name="k3">v3</key></dict>')), 
+            {'k1': 'v1','k2': 'v2','k3': 'v3'})
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(u'<list><item>item1</item><item>item2</item><item><dict><key name="k1">v1</key><key name="k2">v2</key><key name="k3">v3</key></dict></item></list>')), 
+            [u'item1', u'item2', {'k1': 'v1','k2': 'v2','k3': 'v3'}])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(u'<list><item>abc_\u03a0\u03a3\u03a9</item></list>')), 
+            [u'abc_\u03a0\u03a3\u03a9'])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring((b'<list><item>abc_\xce\xa0\xce\xa3\xce\xa9</item></list>'.decode()))),
+            [u'abc_\u03a0\u03a3\u03a9'])
+
+        # test empty nodes
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(('<list><item></item></list>'))), 
+            [None])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(('<list><item/></list>'))), 
+            [None])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(('<dict><key name="emptyme"></key></dict>'))), 
+            {'emptyme': None})
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(('<dict><key name="emptyme"/></dict>'))), 
+            {'emptyme': None})
+
+
+    def testXmltoPrimitiveNS(self):
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring(u'<s:list xmlns:s="%s"><s:item>abc_\u03a0\u03a3\u03a9</s:item></s:list>' % SPLUNK_NS)),
+            [u'abc_\u03a0\u03a3\u03a9'])
+        self.assertEqual(nodeToPrimitive(
+            etree.fromstring((b'<s:list xmlns:s="%s"><s:item>abc_\xce\xa0\xce\xa3\xce\xa9</s:item></s:list>'.decode() % SPLUNK_NS))), 
+            [u'abc_\u03a0\u03a3\u03a9'])
+
         
-        def testStringToXml(self):
-            self.assertEqual(primitiveToXml('asdf'), 'asdf')
-            self.assertEqual(
-                primitiveToXml(b'abc_\xce\xa0\xce\xa3\xce\xa9'.decode('UTF-8')), 
-                u'abc_\u03a0\u03a3\u03a9')
-            self.assertEqual(
-                primitiveToXml(u'abc_\u03a0\u03a3\u03a9'), 
-                u'abc_\u03a0\u03a3\u03a9')
-            self.assertNotEqual(
-                primitiveToXml(u'abc_\u03a0\u03a3\u03a9'), 
-                b'abc_\u03a0\u03a3\u03a9')
-            
-        def testListToXml(self):
-            self.assertEqual(primitiveToXml(['asdf']), '<s:list><s:item>asdf</s:item></s:list>')
-            self.assertEqual(
-                primitiveToXml([u'abc_\u03a0\u03a3\u03a9'.encode('UTF-8')]), 
-                u'<s:list><s:item>abc_\u03a0\u03a3\u03a9</s:item></s:list>'.encode('UTF-8'))
-    
-
-        def testXmltoPrimitive(self):
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring(u'<list><item>item1</item><item>item2</item><item>item3</item></list>')), 
-                [u'item1', u'item2', u'item3'])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring(u'<dict><key name="k1">v1</key><key name="k2">v2</key><key name="k3">v3</key></dict>')), 
-                {'k1': 'v1','k2': 'v2','k3': 'v3'})
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring(u'<list><item>item1</item><item>item2</item><item><dict><key name="k1">v1</key><key name="k2">v2</key><key name="k3">v3</key></dict></item></list>')), 
-                [u'item1', u'item2', {'k1': 'v1','k2': 'v2','k3': 'v3'}])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring(u'<list><item>abc_\u03a0\u03a3\u03a9</item></list>')), 
-                [u'abc_\u03a0\u03a3\u03a9'])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<list><item>abc_\xce\xa0\xce\xa3\xce\xa9</item></list>').decode('UTF-8'))), 
-                [u'abc_\u03a0\u03a3\u03a9'])
-
-            # test empty nodes
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<list><item></item></list>').decode('UTF-8'))), 
-                [None])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<list><item/></list>').decode('UTF-8'))), 
-                [None])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<dict><key name="emptyme"></key></dict>').decode('UTF-8'))), 
-                {'emptyme': None})
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<dict><key name="emptyme"/></dict>').decode('UTF-8'))), 
-                {'emptyme': None})
+    def testXmlToPrimitiveHtmlEntites(self):
+        
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<list><item>&lt;item1&gt;</item><item>&quot;item&apos;2</item></list>')),
+            [u'<item1>', u'"item\'2']
+            )
 
 
-        def testXmltoPrimitiveNS(self):
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring(u'<s:list xmlns:s="%s"><s:item>abc_\u03a0\u03a3\u03a9</s:item></s:list>' % SPLUNK_NS)), 
-                [u'abc_\u03a0\u03a3\u03a9'])
-            self.assertEqual(nodeToPrimitive(
-                etree.fromstring((b'<s:list xmlns:s="%s"><s:item>abc_\xce\xa0\xce\xa3\xce\xa9</s:item></s:list>' % SPLUNK_NS.encode('UTF-8')).decode('UTF-8'))), 
-                [u'abc_\u03a0\u03a3\u03a9'])
+        # check the double encoding scenario
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<dict><key name="eai:data">&lt;level1&gt;&amp;lt;level2&amp;gt;&lt;/level1&gt;</key></dict>')),
+            {'eai:data': '<level1>&lt;level2&gt;</level1>'}
+            )
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<list><item>&lt;level1&gt;&amp;lt;level2&amp;gt;&lt;/level1&gt;</item></list>')),
+            ['<level1>&lt;level2&gt;</level1>']
+            )
 
             
-        def testXmlToPrimitiveHtmlEntites(self):
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<dict><key name="&lt;key1&gt;">&lt;item1&gt;</key><key name="&quot;key&apos;2">&quot;item&apos;2</key></dict>')),
+            { '<key1>': '<item1>', '"key\'2': '"item\'2'}
+            )
+        self.assertEqual(
+            nodeToPrimitive('search sourcetype=&quot;twiki&quot; edit startmonthsago=&quot;1&quot; | where date_hour&gt;20 OR date_hour&lt;5 | top twikiuser'),
+            'search sourcetype="twiki" edit startmonthsago="1" | where date_hour>20 OR date_hour<5 | top twikiuser'
+            )
+
+
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<dict><key name="eai:data">sourcetype=&quot;&lt;twiki&gt;&quot;</key></dict>')),
+            {'eai:data': 'sourcetype="<twiki>"'}
+            )
+        self.assertEqual(
+            nodeToPrimitive(etree.fromstring(u'<list><item>sourcetype=&quot;&lt;twiki&gt;&quot;</item></list>')),
+            ['sourcetype="<twiki>"']
+            )
+
+
+    def testPrimitiveToXmlHtmlEntites(self):
+
+        self.assertEqual(
+            primitiveToXml(['<item1>', '"item\'2']),
+            '<s:list><s:item>&lt;item1&gt;</s:item><s:item>"item\'2</s:item></s:list>',
+            )
+
+        self.assertEqual(
+            primitiveToXml({'<key1>': '<item1>'}),
+            '<s:dict><s:key name="&lt;key1&gt;">&lt;item1&gt;</s:key></s:dict>'
+            )
+
+        self.assertEqual(
+            primitiveToXml({'"key\'2': '"item\'2'}),
+            '<s:dict><s:key name="&quot;key\'2">"item\'2</s:key></s:dict>'
+            )
+
+        self.assertEqual(
+            primitiveToXml({"'key\"2": "'item\"2"}),
+            '<s:dict><s:key name="\'key&quot;2">\'item"2</s:key></s:dict>'
+            )
             
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<list><item>&lt;item1&gt;</item><item>&quot;item&apos;2</item></list>')),
-                [u'<item1>', u'"item\'2']
-                )
-
-
-            # check the double encoding scenario
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<dict><key name="eai:data">&lt;level1&gt;&amp;lt;level2&amp;gt;&lt;/level1&gt;</key></dict>')),
-                {'eai:data': '<level1>&lt;level2&gt;</level1>'}
-                )
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<list><item>&lt;level1&gt;&amp;lt;level2&amp;gt;&lt;/level1&gt;</item></list>')),
-                ['<level1>&lt;level2&gt;</level1>']
-                )
-
-                
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<dict><key name="&lt;key1&gt;">&lt;item1&gt;</key><key name="&quot;key&apos;2">&quot;item&apos;2</key></dict>')),
-                { '<key1>': '<item1>', '"key\'2': '"item\'2'}
-                )
-            self.assertEqual(
-                nodeToPrimitive('search sourcetype=&quot;twiki&quot; edit startmonthsago=&quot;1&quot; | where date_hour&gt;20 OR date_hour&lt;5 | top twikiuser'),
-                'search sourcetype="twiki" edit startmonthsago="1" | where date_hour>20 OR date_hour<5 | top twikiuser'
-                )
-
-
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<dict><key name="eai:data">sourcetype=&quot;&lt;twiki&gt;&quot;</key></dict>')),
-                {'eai:data': 'sourcetype="<twiki>"'}
-                )
-            self.assertEqual(
-                nodeToPrimitive(etree.fromstring(u'<list><item>sourcetype=&quot;&lt;twiki&gt;&quot;</item></list>')),
-                ['sourcetype="<twiki>"']
-                )
-
-
-        def testPrimitiveToXmlHtmlEntites(self):
-
-            self.assertEqual(
-                primitiveToXml(['<item1>', '"item\'2']),
-                '<s:list><s:item>&lt;item1&gt;</s:item><s:item>"item\'2</s:item></s:list>',
-                )
-
-            self.assertEqual(
-                primitiveToXml({'<key1>': '<item1>'}),
-                '<s:dict><s:key name="&lt;key1&gt;">&lt;item1&gt;</s:key></s:dict>'
-                )
-
-            self.assertEqual(
-                primitiveToXml({'"key\'2': '"item\'2'}),
-                '<s:dict><s:key name="&quot;key\'2">"item\'2</s:key></s:dict>'
-                )
-
-            self.assertEqual(
-                primitiveToXml({"'key\"2": "'item\"2"}),
-                '<s:dict><s:key name="\'key&quot;2">\'item"2</s:key></s:dict>'
-                )
-                
-                
-                
-        def testAtomFeed(self):
             
-            feed = AtomFeed()
-            feed.addEntry('ID_STRING', 'entrytitle', strftime(), rawcontents='this is the raw content')
-            self.assertEqual(feed[0].id, 'ID_STRING')
-            self.assertEqual(feed[0].title, 'entrytitle')
-            self.assertEqual(feed[0].rawcontents, 'this is the raw content')
             
-            feed.toXml()
+    def testAtomFeed(self):
+        
+        feed = AtomFeed()
+        feed.addEntry('ID_STRING', 'entrytitle', strftime(), rawcontents='this is the raw content')
+        self.assertEqual(feed[0].id, 'ID_STRING')
+        self.assertEqual(feed[0].title, 'entrytitle')
+        self.assertEqual(feed[0].rawcontents, 'this is the raw content')
+        
+        feed.toXml()
 
-        def testPrimitiveToAtomFeed(self):
-            
-            # test empties
-            feed = primitiveToAtomFeed('hostpath', 'basepath', {})
-            self.assertEqual(len(feed), 0)
-            self.assertEqual(feed.id, 'hostpathbasepath')
-            feed.toXml()
+    def testPrimitiveToAtomFeed(self):
+        
+        # test empties
+        feed = primitiveToAtomFeed('hostpath', 'basepath', {})
+        self.assertEqual(len(feed), 0)
+        self.assertEqual(feed.id, 'hostpathbasepath')
+        feed.toXml()
 
-            feed = primitiveToAtomFeed('hostpath', 'basepath', [])
-            self.assertEqual(len(feed), 0)
-            self.assertEqual(feed.id, 'hostpathbasepath')
-            feed.toXml()
-            
-            # test 1 item
-            feed = primitiveToAtomFeed('hostpath', 'basepath', {'entry1':'value1'})
-            self.assertEqual(len(feed), 1)
-            self.assertEqual(feed.id, 'hostpathbasepath')
+        feed = primitiveToAtomFeed('hostpath', 'basepath', [])
+        self.assertEqual(len(feed), 0)
+        self.assertEqual(feed.id, 'hostpathbasepath')
+        feed.toXml()
+        
+        # test 1 item
+        feed = primitiveToAtomFeed('hostpath', 'basepath', {'entry1':'value1'})
+        self.assertEqual(len(feed), 1)
+        self.assertEqual(feed.id, 'hostpathbasepath')
 
-            feed = primitiveToAtomFeed('hostpath', 'basepath', ['value1'])
-            self.assertEqual(len(feed), 1)
-            self.assertEqual(feed.id, 'hostpathbasepath')
+        feed = primitiveToAtomFeed('hostpath', 'basepath', ['value1'])
+        self.assertEqual(len(feed), 1)
+        self.assertEqual(feed.id, 'hostpathbasepath')
 
-            # test 3 items
-            d = util.OrderedDict()
-            d['entry1'] = 'value1'
-            d['entry2'] = 'value2'
-            d['entry3'] = 'value3'
-            feed = primitiveToAtomFeed('hostpath', 'basepath', d)
-            self.assertEqual(len(feed), 3)
-            self.assertEqual(feed[0], feed.entries[0])
-            self.assertEqual(feed[2], feed.entries[2])
-            self.assertEqual(feed[0].rawcontents, 'value1')
-            self.assertEqual(feed[1].rawcontents, 'value2')
-            self.assertEqual(feed[2].rawcontents, 'value3')
+        # test 3 items
+        d = util.OrderedDict()
+        d['entry1'] = 'value1'
+        d['entry2'] = 'value2'
+        d['entry3'] = 'value3'
+        feed = primitiveToAtomFeed('hostpath', 'basepath', d)
+        self.assertEqual(len(feed), 3)
+        self.assertEqual(feed[0], feed.entries[0])
+        self.assertEqual(feed[2], feed.entries[2])
+        self.assertEqual(feed[0].rawcontents, 'value1')
+        self.assertEqual(feed[1].rawcontents, 'value2')
+        self.assertEqual(feed[2].rawcontents, 'value3')
 
+               
+    def testAtomEntryToPrimitive(self):
+        '''
+        checks that the AtomEntry.toPrimitive() method properly converts
+        the known Splunk XML format into primitives and leaves string values
+        untouched, and unescaped
+        '''
+        
+        xmlstring = '<root xmlns="%s" xmlns:s="%s"><s:dict><s:key name="&quot;key\'2">"item\'2 is &lt; 42</s:key></s:dict></root>' % (ATOM_NS, SPLUNK_NS)
+        xmlelement = etree.fromstring(xmlstring)
                    
-        def testAtomEntryToPrimitive(self):
-            '''
-            checks that the AtomEntry.toPrimitive() method properly converts
-            the known Splunk XML format into primitives and leaves string values
-            untouched, and unescaped
-            '''
-            
-            xmlstring = '<root xmlns="%s" xmlns:s="%s"><s:dict><s:key name="&quot;key\'2">"item\'2 is &lt; 42</s:key></s:dict></root>' % (ATOM_NS, SPLUNK_NS)
-            xmlelement = etree.fromstring(xmlstring)
-                       
-            ae = AtomEntry(id='foo', title='title', updated='now', rawcontents=xmlstring)
-            self.assertEqual(ae.toPrimitive(), xmlstring)
-            
-            ae = AtomEntry(id='foo', title='title', updated='now', rawcontents=xmlelement)
-            self.assertEqual(ae.toPrimitive(), nodeToPrimitive(xmlelement))
-            
-            
+        ae = AtomEntry(id='foo', title='title', updated='now', rawcontents=xmlstring)
+        self.assertEqual(ae.toPrimitive(), xmlstring)
+        
+        ae = AtomEntry(id='foo', title='title', updated='now', rawcontents=xmlelement)
+        self.assertEqual(ae.toPrimitive(), nodeToPrimitive(xmlelement))
+        
 
-            
-            
+if __name__ == "__main__":
     suite = unittest.TestLoader().loadTestsFromTestCase(MainTest)
     unittest.TextTestRunner(verbosity=2).run(suite)
+

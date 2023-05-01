@@ -3,8 +3,7 @@ import logging
 
 from future.moves.urllib import parse as urllib_parse
 
-import lxml.etree as et
-import defusedxml.lxml as safe_lxml
+import splunk.safe_lxml_etree as et
 
 import splunk.util
 from splunk.models.base import SplunkAppObjModel
@@ -58,7 +57,7 @@ class Dashboard(SplunkAppObjModel):
         super(Dashboard, self).from_entity(entity)
         data = entity['eai:data']
         if data:
-            root = safe_lxml.fromstring(splunk.util.toUTF8(data))
+            root = et.fromstring(splunk.util.toUTF8(data))
             self._obj = dashboard.SimpleDashboard()
             try:
                 self._obj.fromXml(root)

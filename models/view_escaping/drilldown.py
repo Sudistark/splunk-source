@@ -2,7 +2,7 @@ from __future__ import absolute_import
 
 from builtins import object
 import logging
-import lxml.etree as et
+import splunk.safe_lxml_etree as et
 
 
 logger = logging.getLogger('splunk.models.view_escaping.drilldown')
@@ -15,10 +15,10 @@ def parseDrilldownAction(node, defaultLinkTarget=None):
     if node.tag == 'set':
         name = node.attrib.get('token', '').strip()
         if not name:
-            logger.warn('Ignoring token action without token name %s', et.tostring(node))
+            logger.warning('Ignoring token action without token name %s', et.tostring(node))
             return
         if node.text is None:
-            logger.warn('Missing text template for token action node %s', et.tostring(node))
+            logger.warning('Missing text template for token action node %s', et.tostring(node))
             return
         return SetToken(
             name=name,
@@ -31,13 +31,13 @@ def parseDrilldownAction(node, defaultLinkTarget=None):
     elif node.tag == 'unset':
         name = node.attrib.get('token', '').strip()
         if not name:
-            logger.warn('Ignoring token action without token name %s', et.tostring(node))
+            logger.warning('Ignoring token action without token name %s', et.tostring(node))
             return
         return UnsetToken(name=name)
 
     elif node.tag == 'link':
         if node.text is None:
-            logger.warn('Missing text template for link action node %s', et.tostring(node))
+            logger.warning('Missing text template for link action node %s', et.tostring(node))
             return
         return Link(
             link=node.text.strip().replace("\n", " "),
@@ -46,11 +46,11 @@ def parseDrilldownAction(node, defaultLinkTarget=None):
         )
     elif node.tag == 'eval':
         if node.text is None:
-            logger.warn('Missing eval expression template %s', et.tostring(node))
+            logger.warning('Missing eval expression template %s', et.tostring(node))
             return
         return EvalToken(name=node.attrib.get('token'), expr=node.text.strip())
     else:
-        logger.warn('Ignoring unrecognized drilldown action %s', et.tostring(node))
+        logger.warning('Ignoring unrecognized drilldown action %s', et.tostring(node))
 
 
 def checkAttrValue(attr, value, fieldMap, node):
@@ -59,8 +59,8 @@ def checkAttrValue(attr, value, fieldMap, node):
         values = dict()
         fieldMap[attr] = values
     if value in values:
-        logger.warn('Duplicate condition for %s="%s" found for drilldown. Overriding previous conditions '
-                    'with %s. (line %d)', attr, value, et.tostring(node).strip().replace('\n', ' '), node.sourceline)
+        logger.warning('Duplicate condition for %s="%s" found for drilldown. Overriding previous conditions '
+                    'with %s. (line %d)', attr, value, et.tostring(node).strip().replace(b'\n', b' '), node.sourceline)
     else:
         values[value] = True
 
@@ -127,7 +127,7 @@ def parseEventHandler(evtHandlerNode, validAttributes, defaultTarget=None, allow
                     raise AttributeError('Cannot mix <%s> with explicit <condition>s' % nodeName)
                 for attr in validAttributes:
                     if attr in child.attrib:
-                        logger.warn('Ignoring field attribute for top-level <%s> action, assuming field="*" (line %d)',
+                        logger.warning('Ignoring field attribute for top-level <%s> action, assuming field="*" (line %d)',
                                                                              nodeName, child.sourceline)
                 action = parseDrilldownAction(child, defaultLinkTarget=defaultTarget)
                 if action is not None:
@@ -152,7 +152,7 @@ def parseEventHandler(evtHandlerNode, validAttributes, defaultTarget=None, allow
 
                 results.append(condition)
             else:
-                logger.warn('Ignoring unrecognized drilldown node "%s" (line %d)', nodeName, child.sourceline)
+                logger.warning('Ignoring unrecognized drilldown node "%s" (line %d)', nodeName, child.sourceline)
 
     return results
 
@@ -205,251 +205,255 @@ class EvalToken(Action):
         self.expr = expr
 
 
-if __name__ == '__main__':
-    import unittest
+#
+# Unittests
+#
+import unittest
 
-    class DrilldownParserTests(unittest.TestCase):
-        def testParseEmptyDrilldownNode(self):
-            result = parseDrilldown(et.fromstring('''<drilldown></drilldown>'''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 0)
-            result = parseDrilldown(et.fromstring('''<drilldown />'''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 0)
-            self.assertTrue(isinstance(result, list))
-            result = parseDrilldown(et.fromstring('''<foo></foo>'''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 0)
-            self.assertTrue(isinstance(result, list))
-            result = parseDrilldown(None)
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 0)
-            self.assertTrue(isinstance(result, list))
+class DrilldownParserTests(unittest.TestCase):
+    def testParseEmptyDrilldownNode(self):
+        result = parseDrilldown(et.fromstring('''<drilldown></drilldown>'''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 0)
+        result = parseDrilldown(et.fromstring('''<drilldown />'''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 0)
+        self.assertTrue(isinstance(result, list))
+        result = parseDrilldown(et.fromstring('''<foo></foo>'''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 0)
+        self.assertTrue(isinstance(result, list))
+        result = parseDrilldown(None)
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 0)
+        self.assertTrue(isinstance(result, list))
 
-        def testParseEmptyCondition(self):
-            result = parseDrilldown(et.fromstring('''
-                    <drilldown>
-                        <condition field="foo"></condition>
-                    </drilldown>
-                '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            cond = result[0]
-            self.assertEqual(cond.field, 'foo')
-            self.assertEqual(len(cond.actions), 0)
-
-        def testParseSimpleLinkNodes(self):
-            result = parseDrilldown(et.fromstring('''
-            
+    def testParseEmptyCondition(self):
+        result = parseDrilldown(et.fromstring('''
                 <drilldown>
-                    <link field="foo">/foo/bar</link>
-                    <link field="bar" target="_blank">/foo/bar</link>
+                    <condition field="foo"></condition>
                 </drilldown>
             '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 2)
-            cond = result[0]
-            self.assertEqual(cond.field, 'foo')
-            self.assertEqual(len(cond.actions), 1)
-            self.assertTrue(isinstance(cond.actions[0], Link))
-            self.assertEqual(cond.actions[0].link, '/foo/bar')
-            self.assertEqual(cond.actions[0].target, None)
-            cond = result[1]
-            self.assertEqual(cond.field, 'bar')
-            self.assertEqual(len(cond.actions), 1)
-            self.assertEqual(cond.actions[0].type, 'link')
-            self.assertEqual(cond.actions[0].link, '/foo/bar')
-            self.assertEqual(cond.actions[0].target, '_blank')
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        cond = result[0]
+        self.assertEqual(cond.field, 'foo')
+        self.assertEqual(len(cond.actions), 0)
 
-        def testParseLinkInCondition(self):
-            result = parseDrilldown(et.fromstring('''
-            
-                <drilldown>
-                    <condition field="foo">
-                        <link>/foo/bar</link>
-                    </condition>
-                    <condition field="bar">
-                        <link target="_blank">/foo/bar</link>
-                    </condition>
-                </drilldown>
-            '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 2)
-            cond = result[0]
-            self.assertEqual(cond.field, 'foo')
-            self.assertEqual(len(cond.actions), 1)
-            self.assertTrue(isinstance(cond.actions[0], Link))
-            self.assertEqual(cond.actions[0].link, '/foo/bar')
-            self.assertEqual(cond.actions[0].target, None)
-            cond = result[1]
-            self.assertEqual(cond.field, 'bar')
-            self.assertEqual(len(cond.actions), 1)
-            self.assertEqual(cond.actions[0].type, 'link')
-            self.assertEqual(cond.actions[0].link, '/foo/bar')
-            self.assertEqual(cond.actions[0].target, '_blank')
+    def testParseSimpleLinkNodes(self):
+        result = parseDrilldown(et.fromstring('''
+        
+            <drilldown>
+                <link field="foo">/foo/bar</link>
+                <link field="bar" target="_blank">/foo/bar</link>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 2)
+        cond = result[0]
+        self.assertEqual(cond.field, 'foo')
+        self.assertEqual(len(cond.actions), 1)
+        self.assertTrue(isinstance(cond.actions[0], Link))
+        self.assertEqual(cond.actions[0].link, '/foo/bar')
+        self.assertEqual(cond.actions[0].target, None)
+        cond = result[1]
+        self.assertEqual(cond.field, 'bar')
+        self.assertEqual(len(cond.actions), 1)
+        self.assertEqual(cond.actions[0].type, 'link')
+        self.assertEqual(cond.actions[0].link, '/foo/bar')
+        self.assertEqual(cond.actions[0].target, '_blank')
 
-        def testParseTokenInCondition(self):
-            result = parseDrilldown(et.fromstring('''
-                <drilldown>
-                    <condition field="*">
-                        <set token="foo">$click.value$</set>
-                        <set token="foobar">
-                            $click.value$
-                        </set>
-                        <unset token="bar" />
-                    </condition>
-                </drilldown>
-            '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            cond = result[0]
-            self.assertEqual(len(cond.actions), 3)
-            action = cond.actions[0]
-            self.assertEqual(action.type, 'settoken')
-            self.assertEqual(action.name, 'foo')
-            self.assertEqual(action.template, '$click.value$')
-            action = cond.actions[1]
-            self.assertEqual(action.type, 'settoken')
-            self.assertEqual(action.name, 'foobar')
-            self.assertEqual(action.template, '$click.value$')
-            action = cond.actions[2]
-            self.assertEqual(action.type, 'unsettoken')
-            self.assertEqual(action.name, 'bar')
-
-        def testParseImplicitLinkAction(self):
-            result = parseDrilldown(et.fromstring('''
-                <drilldown>
+    def testParseLinkInCondition(self):
+        result = parseDrilldown(et.fromstring('''
+        
+            <drilldown>
+                <condition field="foo">
                     <link>/foo/bar</link>
-                </drilldown>
-            '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            cond = result[0]
-            self.assertEqual(cond.field, '*')
-            self.assertEqual(len(cond.actions), 1)
-            action = cond.actions[0]
-            self.assertEqual(action.type, 'link')
+                </condition>
+                <condition field="bar">
+                    <link target="_blank">/foo/bar</link>
+                </condition>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 2)
+        cond = result[0]
+        self.assertEqual(cond.field, 'foo')
+        self.assertEqual(len(cond.actions), 1)
+        self.assertTrue(isinstance(cond.actions[0], Link))
+        self.assertEqual(cond.actions[0].link, '/foo/bar')
+        self.assertEqual(cond.actions[0].target, None)
+        cond = result[1]
+        self.assertEqual(cond.field, 'bar')
+        self.assertEqual(len(cond.actions), 1)
+        self.assertEqual(cond.actions[0].type, 'link')
+        self.assertEqual(cond.actions[0].link, '/foo/bar')
+        self.assertEqual(cond.actions[0].target, '_blank')
 
-        def testParseImplicitSetTokenAction(self):
-            result = parseDrilldown(et.fromstring('''
-                <drilldown>
+    def testParseTokenInCondition(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <condition field="*">
                     <set token="foo">$click.value$</set>
-                </drilldown>
-            '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            cond = result[0]
-            self.assertEqual(cond.field, '*')
-            self.assertEqual(len(cond.actions), 1)
-            action = cond.actions[0]
-            self.assertEqual(action.type, 'settoken')
-            self.assertEqual(action.name, 'foo')
-            self.assertEqual(action.template, '$click.value$')
+                    <set token="foobar">
+                        $click.value$
+                    </set>
+                    <unset token="bar" />
+                </condition>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        cond = result[0]
+        self.assertEqual(len(cond.actions), 3)
+        action = cond.actions[0]
+        self.assertEqual(action.type, 'settoken')
+        self.assertEqual(action.name, 'foo')
+        self.assertEqual(action.template, '$click.value$')
+        action = cond.actions[1]
+        self.assertEqual(action.type, 'settoken')
+        self.assertEqual(action.name, 'foobar')
+        self.assertEqual(action.template, '$click.value$')
+        action = cond.actions[2]
+        self.assertEqual(action.type, 'unsettoken')
+        self.assertEqual(action.name, 'bar')
 
-        def testParseImplicitSetTokenActions(self):
-            result = parseDrilldown(et.fromstring('''
-                <drilldown>
-                    <set token="foo">$click.value$</set>
-                    <set token="bar">$click.value2$</set>
-                    <unset token="foobar" />
-                </drilldown>
-            '''))
-            self.assertIsNotNone(result)
-            self.assertEqual(len(result), 1)
-            cond = result[0]
-            self.assertEqual(cond.field, '*')
-            self.assertEqual(len(cond.actions), 3)
-            action = cond.actions[0]
-            self.assertEqual(action.type, 'settoken')
-            self.assertEqual(action.name, 'foo')
-            self.assertEqual(action.template, '$click.value$')
-            action = cond.actions[1]
-            self.assertEqual(action.type, 'settoken')
-            self.assertEqual(action.name, 'bar')
-            self.assertEqual(action.template, '$click.value2$')
-            action = cond.actions[2]
-            self.assertEqual(action.type, 'unsettoken')
-            self.assertEqual(action.name, 'foobar')
+    def testParseImplicitLinkAction(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <link>/foo/bar</link>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        cond = result[0]
+        self.assertEqual(cond.field, '*')
+        self.assertEqual(len(cond.actions), 1)
+        action = cond.actions[0]
+        self.assertEqual(action.type, 'link')
 
-        def testParserDoesNotFailWithComments(self):
-            result = parseDrilldown(et.fromstring('''
+    def testParseImplicitSetTokenAction(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <set token="foo">$click.value$</set>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        cond = result[0]
+        self.assertEqual(cond.field, '*')
+        self.assertEqual(len(cond.actions), 1)
+        action = cond.actions[0]
+        self.assertEqual(action.type, 'settoken')
+        self.assertEqual(action.name, 'foo')
+        self.assertEqual(action.template, '$click.value$')
+
+    def testParseImplicitSetTokenActions(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <set token="foo">$click.value$</set>
+                <set token="bar">$click.value2$</set>
+                <unset token="foobar" />
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result), 1)
+        cond = result[0]
+        self.assertEqual(cond.field, '*')
+        self.assertEqual(len(cond.actions), 3)
+        action = cond.actions[0]
+        self.assertEqual(action.type, 'settoken')
+        self.assertEqual(action.name, 'foo')
+        self.assertEqual(action.template, '$click.value$')
+        action = cond.actions[1]
+        self.assertEqual(action.type, 'settoken')
+        self.assertEqual(action.name, 'bar')
+        self.assertEqual(action.template, '$click.value2$')
+        action = cond.actions[2]
+        self.assertEqual(action.type, 'unsettoken')
+        self.assertEqual(action.name, 'foobar')
+
+    def testParserDoesNotFailWithComments(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <!-- this is a comment -->
+                <condition field="foo">
+                    <set token="blah">$click.value$</set>
+                    <!-- another comment -->
+                    <set token="buh"><!-- some comment--></set>
+                    <link><!-- comment comment --></link>
+                </condition>
+            </drilldown>
+        '''))
+        self.assertIsNotNone(result)
+
+    def testParsePrefixAndSuffixForSet(self):
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <set token="foo" prefix="sourcetype=&quot;" suffix="&quot;">$click.value$</set>
+            </drilldown>
+        '''))
+        action = result[0].actions[0]
+        self.assertEqual(action.name, 'foo')
+        self.assertEqual(action.prefix, 'sourcetype="')
+        self.assertEqual(action.suffix, '"')
+
+        result = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <set token="foo">$click.value|s$</set>
+            </drilldown>
+        '''))
+        action = result[0].actions[0]
+        self.assertEqual(action.name, 'foo')
+        self.assertIsNone(action.prefix)
+        self.assertIsNone(action.suffix)
+
+    def testMixedConditionsRaisesError(self):
+
+        with self.assertRaises(AttributeError):
+            parseDrilldown(et.fromstring('''
                 <drilldown>
-                    <!-- this is a comment -->
-                    <condition field="foo">
-                        <set token="blah">$click.value$</set>
-                        <!-- another comment -->
-                        <set token="buh"><!-- some comment--></set>
-                        <link><!-- comment comment --></link>
+                    <set token="foo">...</set>
+                    <condition field="foobar">
+                        <set token="bar">...</set>
                     </condition>
                 </drilldown>
             '''))
-            self.assertIsNotNone(result)
 
-        def testParsePrefixAndSuffixForSet(self):
-            result = parseDrilldown(et.fromstring('''
+        with self.assertRaises(AttributeError):
+            parseDrilldown(et.fromstring('''
                 <drilldown>
-                    <set token="foo" prefix="sourcetype=&quot;" suffix="&quot;">$click.value$</set>
-                </drilldown>
-            '''))
-            action = result[0].actions[0]
-            self.assertEquals(action.name, 'foo')
-            self.assertEquals(action.prefix, 'sourcetype="')
-            self.assertEquals(action.suffix, '"')
-
-            result = parseDrilldown(et.fromstring('''
-                <drilldown>
-                    <set token="foo">$click.value|s$</set>
-                </drilldown>
-            '''))
-            action = result[0].actions[0]
-            self.assertEquals(action.name, 'foo')
-            self.assertIsNone(action.prefix)
-            self.assertIsNone(action.suffix)
-
-        def testMixedConditionsRaisesError(self):
-
-            with self.assertRaises(AttributeError):
-                parseDrilldown(et.fromstring('''
-                    <drilldown>
-                        <set token="foo">...</set>
-                        <condition field="foobar">
-                            <set token="bar">...</set>
-                        </condition>
-                    </drilldown>
-                '''))
-
-            with self.assertRaises(AttributeError):
-                parseDrilldown(et.fromstring('''
-                    <drilldown>
-                        <condition field="foobar">
-                            <set token="bar">...</set>
-                        </condition>
-                        <set token="foo">...</set>
-                    </drilldown>
-                '''))
-
-            with self.assertRaises(AttributeError):
-                parseDrilldown(et.fromstring('''
-                    <drilldown>
-                        <set token="foo">...</set>
-                        <condition field="foobar">
-                            <set token="bar">...</set>
-                        </condition>
-                        <unset token="foo" />
-                    </drilldown>
-                '''))
-                
-        def testParseEmptyCondition(self):
-            drilldown = parseDrilldown(et.fromstring('''
-                <drilldown>
-                    <condition>
-                        <link>foo</link>
+                    <condition field="foobar">
+                        <set token="bar">...</set>
                     </condition>
+                    <set token="foo">...</set>
                 </drilldown>
             '''))
-            self.assertEqual(drilldown[0].attr, 'any')
-            self.assertEqual(drilldown[0].value, '*')
 
+        with self.assertRaises(AttributeError):
+            parseDrilldown(et.fromstring('''
+                <drilldown>
+                    <set token="foo">...</set>
+                    <condition field="foobar">
+                        <set token="bar">...</set>
+                    </condition>
+                    <unset token="foo" />
+                </drilldown>
+            '''))
+            
+    def testParseEmptyCondition(self):
+        drilldown = parseDrilldown(et.fromstring('''
+            <drilldown>
+                <condition>
+                    <link>foo</link>
+                </condition>
+            </drilldown>
+        '''))
+        self.assertEqual(drilldown[0].attr, 'any')
+        self.assertEqual(drilldown[0].value, '*')
+
+
+if __name__ == '__main__':
     logger.setLevel(logging.ERROR)
     loader = unittest.TestLoader()
     suite = [loader.loadTestsFromTestCase(case) for case in (DrilldownParserTests,)]

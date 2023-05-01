@@ -26,7 +26,7 @@ def initVersionInfo(force=False, sessionKey=None):
 
     if not sessionKey:
         sessionKey = splunk.getSessionKey()
-    
+
     if cherrypy.config.get(VERSION_INIT_KEY) and not (force or sessionKey):
         return True
 
@@ -36,7 +36,7 @@ def initVersionInfo(force=False, sessionKey=None):
     cpuArch = 'UNKNOWN_CPU_ARCH'
     osName = 'UNKNOWN_OS_NAME'
     versionLabel = 'UNKNOWN_VERSION'
-    versionNumber = '4.0'
+    versionNumber = 'UNKNOWN_VERSION'
     isTrialLicense = True
     isFreeLicense = False
     licenseState = 'OK'
@@ -50,7 +50,7 @@ def initVersionInfo(force=False, sessionKey=None):
     install_type = 'UNKNOWN_INSTALL_TYPE'
     licenseGroup = None
     productType = 'splunk'
-    instanceType = 'splunk'
+    instanceType = 'cloud'
     serverName = ''
     staticAssetId = '000'
     addOns = {}
@@ -88,7 +88,7 @@ def initVersionInfo(force=False, sessionKey=None):
 
         # default to pro
         license_desc = 'pro'
-        
+
         #we are a free license
         if ( isFreeLicense ):
             license_desc = 'free'
@@ -105,7 +105,7 @@ def initVersionInfo(force=False, sessionKey=None):
         install_type = 'trial' if isTrialLicense else 'prod'
         if ( guid != master_guid ):
             install_type = install_type + '_slave'
-            
+
     except Exception as e:
         success = False
         if sessionKey is not None:
@@ -141,7 +141,7 @@ def initVersionInfo(force=False, sessionKey=None):
 
     return success
 
-def getDatepickerPath (): 
+def getDatepickerPath ():
     """
     returns the path of the datepicker js file with the correct locale
     """
@@ -168,10 +168,8 @@ def generateJSManifest(internal_use = False):
     # only used internally, templates include these in base.html
     js_initial_filenames = [
             # initial packages
-            ("contrib", "jquery", "jquery.js"),
-            "i18n.js",
-            "splunk.js",
-            "util.js"
+            ("..", "build", "startupjs", "internalDeps.js"),
+            "i18n.js"
     ]
 
     # !!!!!
@@ -179,82 +177,8 @@ def generateJSManifest(internal_use = False):
     # for Manager pages that don't use view system.
     js_filenames = [
             # external packages
-            ("contrib", "lowpro_for_jquery.js"),
-            ("contrib", "json2.js"),
-            ("contrib", "deprecated", "jquery-ui-1.8.24.js"),
-            ("contrib", "jquery.ui.tablesorter.js"),
-            ("contrib", "jquery.bgiframe.min.js"),
-            ("contrib", "jquery.cookie.js"),
-            ("contrib", "jquery.form.js"),
-            ("contrib", "ui.spinner.js"),
-            ("contrib", "jquery.tipTip.minified.js"),
-            ("contrib", "jquery.iphone-style-checkboxes.js"),
-            ("contrib", "jquery.ui.nestedSortable.js"),
-            ("contrib", "jquery.placeholder.min.js"),
-            ("contrib", "spin.min.js"),
-            ("contrib", "jquery.treeview.js"),
-            ("contrib", "jquery.treeview.edit.js"),
-            ("contrib", "jquery.treeview.async.js"),
-            ("contrib", "jquery.tools.min.js"),
-            ("contrib", "doT.js"),
-            ("contrib", "jg_global.js"),
-            ("contrib", "jg_library.js"),
-            ("contrib", "script.js"),
-            ("contrib", "jquery.trap.min.js"),
-
-            # splunk sdk, required for geoviz
-            ("contrib", "splunk.js"),
-
-            # TEMPORARY - we're still looking for something better than strftime
-            ("contrib", "strftime.js"),
-
-            # splunk packages
-            "logger.js",
-            "error.js",
-            "session.js",
-            "job.js",
-            "messenger.js",
-            "message.js",
-            "context.js",
-            "search.js",
-            "jobber.js",
-            "menu_builder.js",
-            "admin.js",
-            "admin_lite.js",
-            "time_range.js",
-            "module_loader.js",
-            "ja_bridge.js",
-            "legend.js",
-            "jquery.sparkline.js",
-            "popup.js",
-            "layout_engine.js",
-            "paginator.js",
-            "print.js",
-            "page_status.js",
-            "dev.js",
-            "window.js",
-            "field_summary.js",
-            "viewmaster.js",
-            "textarea_resize.js",
-            "scroller.js",
-            "timespinner.js",
-            "login.js",
-            "dashboard.js",
-            "splunk_time.js",
-            "pdf.js",   
-
-            # patch the draggables lib for ios support
-            ("patches", "splunk.jquery.ios-drag-patch.js"),
-
-            # Check for the CSRF token
-            "splunk.jquery.csrf_protection.js",
-
-            # Check for the X-Splunk-Messages-Available flag and instruct the Messenger to update itself
-            "splunk.jquery.check_messages.js",
-
-            # rich radio controls
-            "splunk.jquery.radio.js"
-            ]
+            ("..", "build", "startupjs", "deps.js"),
+    ]
 
     if (util.isLite()):
         js_filenames.append(("..", "build", "modules_nav", "lite", "index.js"))
